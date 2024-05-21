@@ -10,4 +10,4 @@ datasets/*
 datasets/sacre_coeur/query
 
 # custom
-.blend*
+*.blend*
