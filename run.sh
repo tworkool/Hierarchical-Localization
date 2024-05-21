@@ -1,0 +1,1 @@
+jupyter lab --allow-root --browser=google-chrome --ServerApp.iopub_data_rate_limit=10000000.0 --ServerApp.rate_limit_window=10.0

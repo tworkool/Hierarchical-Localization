@@ -11,3 +11,7 @@ pycolmap>=0.6.0
 kornia>=0.6.11
 gdown
 lightglue @ git+https://github.com/cvg/LightGlue
+ipywidgets
+jupyterlab
+tabulate
+colorama
