@@ -59,4 +59,5 @@ class R2D2(BaseModel):
             "descriptors": desc[None],
             "scores": scores[None],
         }
+        print(pred)
         return pred

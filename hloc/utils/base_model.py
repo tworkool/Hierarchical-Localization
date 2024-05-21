@@ -20,6 +20,7 @@ class BaseModel(nn.Module, metaclass=ABCMeta):
 
     def forward(self, data):
         """Check the data and call the _forward method of the child model."""
+        print(data.keys())
         for key in self.required_inputs:
             assert key in data, "Missing key {} in data".format(key)
         return self._forward(data)

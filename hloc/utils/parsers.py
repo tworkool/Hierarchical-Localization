@@ -8,6 +8,25 @@ import pycolmap
 logger = logging.getLogger(__name__)
 
 
+def parse_image_list_dir(
+    path: Path,
+    image_extensions={".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"},
+):
+    # Get all files in the directory and its subdirectories
+    all_files = path.rglob("*")
+    # Filter image files by their extensions, case-insensitively
+    image_files = [
+        file for file in all_files if file.suffix.lower() in image_extensions
+    ]
+    # Convert to absolute paths
+    #images = [str(file.resolve()) for file in image_files]
+    images = [str(file.name) for file in image_files]
+
+    assert len(images) > 0
+    logger.info(f"Imported {len(images)} images from {path.name}")
+    return images
+
+
 def parse_image_list(path, with_intrinsics=False):
     images = []
     with open(path, "r") as f:
