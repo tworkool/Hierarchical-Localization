@@ -296,6 +296,8 @@ def load_keypoints(
         n: i for i, p in enumerate(feature_paths_refs) for n in list_h5_names(p)
     }
 
+    print([p for i, p in enumerate(feature_paths_refs) for n in list_h5_names(p)])
+
     existing_refs = set(name2ref.keys())
     if quantize is None:
         quantize = existing_refs  # quantize all
@@ -307,6 +309,7 @@ def load_keypoints(
     bindict = defaultdict(list)
     for name in existing_refs:
         with h5py.File(str(feature_paths_refs[name2ref[name]]), "r") as fd:
+            print(fd[name])
             kps = fd[name]["keypoints"].__array__()
             if name not in quantize:
                 cpdict[name] = kps

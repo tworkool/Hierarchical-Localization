@@ -13,6 +13,7 @@ from tqdm import tqdm
 from . import logger, matchers
 from .utils.base_model import dynamic_load
 from .utils.parsers import names_to_pair, names_to_pair_old, parse_retrieval
+from .utils.dataloader import MultiEpochsDataLoader
 
 """
 A set of standard configurations that can be directly selected from the command
@@ -239,8 +240,9 @@ def match_from_paths(
 
     dataset = FeaturePairsDataset(pairs, feature_path_q, feature_path_ref)
     loader = torch.utils.data.DataLoader(
-        dataset, num_workers=5, batch_size=1, shuffle=False, pin_memory=True
+        dataset, num_workers=2, batch_size=1, shuffle=False
     )
+
     writer_queue = WorkQueue(partial(writer_fn, match_path=match_path), 5)
 
     for idx, data in enumerate(tqdm(loader, smoothing=0.1)):

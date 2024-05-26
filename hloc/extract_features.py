@@ -26,6 +26,13 @@ line using their name. Each is a dictionary with the following entries:
     - preprocessing: how to preprocess the images read from disk.
 """
 confs = {
+    "s2dnet": {
+        "output": "s2dnet-n4096-r1600",
+        "model": {"name": "s2dnet"},
+        "preprocessing": {
+            "resize_max": 1600,
+        },
+    },
     "superpoint_aachen": {
         "output": "feats-superpoint-n4096-r1024",
         "model": {
@@ -249,7 +256,7 @@ def main(
     model = Model(conf["model"]).eval().to(device)
 
     loader = torch.utils.data.DataLoader(
-        dataset, num_workers=1, shuffle=False, pin_memory=True
+        dataset, num_workers=1, timeout=9999, shuffle=False, pin_memory=True
     )
     for idx, data in enumerate(tqdm(loader)):
         name = dataset.names[idx]

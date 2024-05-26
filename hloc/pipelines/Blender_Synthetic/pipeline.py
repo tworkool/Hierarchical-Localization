@@ -26,7 +26,27 @@ config = [
     {
         "extractor": "superpoint_max",
         "matcher": "superglue",
-    }  # add more matching pipelines!
+    },
+    {
+        "extractor": "disk",
+        "matcher": "lightglue",
+    },
+    {
+        "matcher": "loftr",
+    },
+    {
+        "extractor": "superpoint_max",
+        "matcher": "lightglue",
+    },
+    {
+        "extractor": "s2dnet",  # TODO: add s2d
+        "matcher": "lightglue",
+    },
+    {
+        "extractor": "r2d2",  # TODO: add r2d2
+        "matcher": "lightglue",
+    },
+    # TODO: add HP (Does not work...)
 ]
 
 
@@ -45,16 +65,14 @@ def get_matcher_config(key):
 
 
 def validate():
-    required_keys = ["extractor", "matcher"]
+    required_keys = ["matcher"]
     for c in config:
         if not all(key in c for key in required_keys):
-            ABORT(
-                f"VALIDATION FAILED: config items require these items: {required_keys}"
-            )
+            ABORT(f"Validation: config items require these items: {required_keys}")
         if not get_extractor_config(c["extractor"]):
-            ABORT(f"VALIDATION FAILED: {c['extractor']} is not a valid extractor")
+            log.warn(f"Validation: extractor is missing or invalid")
         if not get_matcher_config(c["matcher"]):
-            ABORT(f"VALIDATION FAILED: {c['matcher']} is not a valid matcher")
+            ABORT(f"Validation: {c['matcher']} is not a valid matcher")
     log.info("Validation Succeeded")
     return
 
