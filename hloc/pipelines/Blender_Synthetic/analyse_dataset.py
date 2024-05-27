@@ -6,7 +6,7 @@ import time
 import numpy as np
 import re
 from pprint import pp
-from mathutils import Matrix, Euler
+from mathutils import Matrix, Euler, Quaternion
 
 root_dir = os.getcwd()
 transforms = None
@@ -146,6 +146,19 @@ def align_estimated_to_ground_truth(est_cams, gt_cams, top_cams, apply_to=None):
             est_position, scale, rotation, translation
         )
         cam.location = transformed_position
+        local_rot = Matrix(rotation).transposed().to_euler()
+        print(local_rot, cam.rotation_euler)
+        new_euler = Euler(
+            (
+                cam.rotation_euler.x + local_rot.x,
+                cam.rotation_euler.y + local_rot.y,
+                cam.rotation_euler.z + local_rot.z,
+            ),
+            "XYZ",
+        )
+        # new_euler = Euler((cam.rotation_euler.x-local_rot.x, cam.rotation_euler.y-local_rot.y, cam.rotation_euler.z-local_rot.z), 'XYZ')
+        cam.rotation_euler = new_euler
+
         # apply_helmert_transform_blender(cam, scale, rotation, translation)
 
     print("Alignment complete")
