@@ -173,14 +173,16 @@ def calculate_mean_frame_error(img, pts):
         frame_pts += 1
     frame_error = None if frame_pts == 0 else frame_error_sum / frame_pts
     if skipped_pts > 0:
-        print(f'skipped unregistered 3D points: {skipped_pts}')
+        print(f"skipped unregistered 3D points: {skipped_pts}")
     return frame_error
+
 
 class NumpyEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.ndarray):
             return obj.tolist()
         return json.JSONEncoder.default(self, obj)
+
 
 def export_to_json(
     cameras, images, points3D, bounding_box, center, radius, file_path, image_dir
@@ -200,9 +202,7 @@ def export_to_json(
 
     # sample point
     # print(list(points3D.values())[0])
-    points = [
-        {"rgb": p.rgb, "xyz": p.xyz} for _, p in list(points3D.items())
-    ]
+    points = [{"rgb": p.rgb, "xyz": p.xyz} for _, p in list(points3D.items())]
 
     out = {
         "camera_angle_x": angle_x,
@@ -242,7 +242,7 @@ def export_to_json(
         c2w = _cv_to_gl(c2w)  # convert to GL convention used in iNGP
 
         frame_err = calculate_mean_frame_error(img, points3D)
-        print(f'frame reprojection error for image ID {img_id}: {round(frame_err, 3)}')
+        print(f"frame reprojection error for image ID {img_id}: {round(frame_err, 3)}")
 
         full_image_path = Path(f"{image_dir}/{img.name}")
         metadata = None
@@ -283,9 +283,7 @@ def export_to_json(
 
 
 def data_to_json(args: dict):
-    cameras, images, points3D = read_model(
-        args.get("data_dir"), ext=".bin"
-    )
+    cameras, images, points3D = read_model(args.get("data_dir"), ext=".bin")
 
     # define bounding regions based on scene type
     if args.get("scene_type") == "outdoor":
@@ -302,6 +300,8 @@ def data_to_json(args: dict):
     else:
         raise TypeError("Unknown scene type")
 
+    file_name = args.get("name", None) or "transforms.json"
+    file_path = os.path.join(args.get("data_dir"), file_name)
     # export json file
     export_to_json(
         cameras,
@@ -310,13 +310,10 @@ def data_to_json(args: dict):
         bounding_box,
         list(center),
         radius,
-        os.path.join(args.get("data_dir"), "transforms.json"),
+        file_path,
         args.get("image_dir"),
     )
-    print(
-        "Writing data to json file: ",
-        os.path.join(args.get("data_dir"), "transforms.json"),
-    )
+    print(f"Writing data to json file: {file_path}")
     return
 
 

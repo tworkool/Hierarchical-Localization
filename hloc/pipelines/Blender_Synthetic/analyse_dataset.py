@@ -6,7 +6,7 @@ import time
 import numpy as np
 import re
 from pprint import pp
-from mathutils import Matrix, Euler, Quaternion
+from mathutils import Matrix, Euler, Quaternion, Vector
 
 root_dir = os.getcwd()
 transforms = None
@@ -113,6 +113,44 @@ def helmert_transform(ground_truth_points, estimated_points):
     return scale, rotation, translation
 
 
+def calculate_local_rotation(C, P1_t1, P1_t2, R1_t1):
+    # Convert points to numpy vectors
+    C = Vector(C)
+    P1_t1 = Vector(P1_t1)
+    P1_t2 = Vector(P1_t2)
+
+    # Calculate vectors from center point C to P1_t1 and P1_t2
+    v_t1 = P1_t1 - C
+    v_t2 = P1_t2 - C
+
+    # Normalize the vectors
+    v_t1.normalize()
+    v_t2.normalize()
+
+    # Calculate the rotation axis (cross product of v_t1 and v_t2)
+    axis = v_t1.cross(v_t2)
+    axis.normalize()
+
+    # Calculate the rotation angle (dot product and arccos of normalized vectors)
+    angle = np.arccos(v_t1.dot(v_t2))
+
+    # Handle the case where vectors are parallel or anti-parallel
+    if axis.length == 0.0:
+        # No rotation needed if vectors are parallel
+        return Euler(R1_t1, "XYZ")
+
+    # Calculate rotation matrix using axis-angle
+    rotation_matrix = Matrix.Rotation(angle, 4, axis)
+
+    # Apply rotation to R1_t1
+    R1_t1_euler = Euler(R1_t1, "XYZ")
+    R1_t1_matrix = R1_t1_euler.to_matrix().to_4x4()
+    R1_t2_matrix = rotation_matrix @ R1_t1_matrix
+    R1_t2_euler = R1_t2_matrix.to_euler("XYZ")
+
+    return R1_t2_euler
+
+
 def apply_helmert_transform(points, scale, rotation, translation):
     transformed_points = scale * np.dot(points, rotation.T) + translation
     return transformed_points
@@ -130,7 +168,7 @@ def apply_helmert_transform_blender(cam, scale, rotation, translation):
     cam.rotation_euler = rotation_euler
 
 
-def align_estimated_to_ground_truth(est_cams, gt_cams, top_cams, apply_to=None):
+def align_estimated_to_ground_truth(est_cams, top_cams, apply_to=None):
     # Extract the top cameras' positions
     gt_positions = np.array([cam["c1"].location for cam in top_cams])
     est_positions = np.array([cam["c2"].location for cam in top_cams])
@@ -145,19 +183,29 @@ def align_estimated_to_ground_truth(est_cams, gt_cams, top_cams, apply_to=None):
         transformed_position = apply_helmert_transform(
             est_position, scale, rotation, translation
         )
-        cam.location = transformed_position
-        local_rot = Matrix(rotation).transposed().to_euler()
-        print(local_rot, cam.rotation_euler)
-        new_euler = Euler(
-            (
-                cam.rotation_euler.x + local_rot.x,
-                cam.rotation_euler.y + local_rot.y,
-                cam.rotation_euler.z + local_rot.z,
-            ),
-            "XYZ",
+
+        """
+        # Normalize points to the center
+        print(top_cams[0]["c2"].name)
+        center = Vector(est_positions[0].tolist())
+        old_pos_normalized = cam.location - center
+        new_pos_normalized = Vector(transformed_position) - center
+
+        loc_rot = calculate_local_rotation(
+            center, # pivot point
+            old_pos_normalized, # old pos relative to center
+            new_pos_normalized, # new pos relative to center
+            cam.rotation_euler # old rot
         )
-        # new_euler = Euler((cam.rotation_euler.x-local_rot.x, cam.rotation_euler.y-local_rot.y, cam.rotation_euler.z-local_rot.z), 'XYZ')
-        cam.rotation_euler = new_euler
+        
+        cam.rotation_euler = loc_rot
+        """
+
+        cam.location = transformed_position
+
+        local_rot = Matrix(rotation).transposed().to_euler()
+        # print(local_rot, cam.rotation_euler)
+        cam.rotation_euler.rotate(local_rot)
 
         # apply_helmert_transform_blender(cam, scale, rotation, translation)
 
@@ -215,6 +263,6 @@ cam_map = map_cameras(gt_cams, est_cams, transforms)
 top_cams = get_top_cams(cam_map)
 
 # Align estimated cameras to ground truth
-align_estimated_to_ground_truth(est_cams, gt_cams, top_cams)
+align_estimated_to_ground_truth(est_cams, top_cams)
 
 analyse_poses(cam_map)
