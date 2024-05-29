@@ -21,13 +21,14 @@ from third_party.Neuralangelo.convert_data_to_json import data_to_json
 
 """
 Pipeline for testing multiple HLOC pipelines on multiple datasets
-call like this: python pipeline.py --dataset datasets/Bartholomew+evening_field_8k/
+call like this: python pipeline.py --dataset Bartholomew+evening_field_8k
 """
 logging.basicConfig(format="  >> %(levelname)s: %(message)s", level=logging.INFO)
 log = logging.getLogger("HlocBlenderSynthPipeline")
 ROOT = Path(__file__).parent.resolve()
+IMAGES_FOLDER_NAME = "images"
 
-config = [
+config1 = [
     {
         "extractor": "superpoint_max",
         "matcher": "superglue",
@@ -43,6 +44,15 @@ config = [
     {"extractor": "s2dnet", "matcher": "loftr", "name": "..."},  # TODO: add s2d
     {"extractor": "r2d2", "matcher": "loftr", "name": "..."},  # TODO: add r2d2
     # TODO: add HP (Does not work...)
+]
+
+config = [
+    {
+        "extractor": "superpoint_max",
+        "matcher": "superglue",
+        "name": "superpoint+superglue",
+    },
+    {"extractor": "disk", "matcher": "disk+lightglue", "name": "disk+lightglue"},
 ]
 
 
@@ -88,14 +98,15 @@ def run_component(component, dataset) -> Path:
         log.info(f"  SKIPPING Component - '{id}' already ran for dataset '{dataset}'")
         return None
 
+    OUT.mkdir(parents=True, exist_ok=True)
+
     extractor_conf = get_extractor_config(component["extractor"])
     matcher_conf, is_dense = get_matcher_config(component["matcher"])
 
     IN = Path(ROOT / "datasets" / dataset)
-    IMAGES = Path(IN / "images")
+    IMAGES = Path(IN / IMAGES_FOLDER_NAME)
     sfm_pairs = OUT / f"{id}-pairs.txt"
     sfm_dir = OUT / id
-    sfm_images = sfm_dir / "images"
 
     # get image pairs
     pairs_from_all.main(sfm_pairs, IMAGES)
@@ -121,9 +132,7 @@ def run_component(component, dataset) -> Path:
         )
 
     # start reconstruction
-    model = reconstruction.main(
-        sfm_dir, sfm_images, sfm_pairs, feature_path, match_path
-    )
+    model = reconstruction.main(sfm_dir, IMAGES, sfm_pairs, feature_path, match_path)
 
     # TODO: localization pipeline?
 
@@ -136,6 +145,7 @@ def run_component(component, dataset) -> Path:
     }
     data_to_json(args)
 
+    sfm_images = sfm_dir / IMAGES_FOLDER_NAME
     if not sfm_images.exists():
         # copy files from input images to self contained project path
         # os.mkdir(new_input_path)
@@ -163,27 +173,28 @@ def run_analysis(blender_file: Path, transforms_json: Path):
 
 def main(args):
     validate()
+    dataset_name = args.dataset
+    dataset_path = ROOT / "datasets" / dataset_name
 
-    if not args.dataset.exists():
+    if not dataset_path.exists():
         ABORT(
             "Please provide the path to the dataset containing 'images' and 'test.blend'"
         )
 
-    image_path = args.dataset / "images"
+    image_path = dataset_path / IMAGES_FOLDER_NAME
     if not image_path.exists():
         ABORT(
             "Please provide an 'images' folder containing the images for reconstruction in the dataset"
         )
 
-    blender_file = args.dataset / "test.blend"
+    blender_file = dataset_path / "test.blend"
     if not blender_file.exists():
         ABORT("Please provide a blender file 'test.blend' for running stats")
 
     """ if not (args.dataset.is_file() and args.dataset.name.split(".")[-1] == "blend"):
         raise Exception("Provided dataset is not a .blend file") """
 
-    dataset_name = "Test"
-
+    log.info(f"Loaded dataset under {dataset_path}")
     log.info("Step 1: reconstructions")
     for c in config:
         # implement timer!
@@ -198,9 +209,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--dataset",
-        type=Path,
+        type=str,
         required=True,
-        help="Path to the dataset (.blend file)",
+        help="Name of the dataset in the 'dataset' folder",
     )
     args = parser.parse_args()
     main(args)

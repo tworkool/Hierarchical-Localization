@@ -21,8 +21,7 @@ def main(
             pairs.append((sorted_image_ids[i], sorted_image_ids[j]))
 
     logger.info(f"Found {len(pairs)} pairs.")
-    print(pairs[0])
-    with open(output, "w") as f:
+    with open(output, "w+") as f:
         f.write("\n".join(" ".join([i, j]) for i, j in pairs))
 
 
