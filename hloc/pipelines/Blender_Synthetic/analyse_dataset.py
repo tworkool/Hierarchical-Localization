@@ -1,20 +1,34 @@
 import json
 import bpy
-import os
+import sys
 from random import uniform
 import time
 import numpy as np
 import re
 from pprint import pp
 from mathutils import Matrix, Euler, Quaternion, Vector
+import bmesh
+import argparse
+from pathlib import Path
 
-root_dir = os.getcwd()
+ROOT = Path(__file__).resolve()
 transforms = None
+DEFAULT_FOCAL_LENGTH = 27
+DEFAULT_SENSOR_WIDTH = 35
+MAX_REPROJECTION_ERROR_THESHOLD = 1.0  # warning if avg is above
+MAX_CAMS = 3  # for transformation alignment
 
-with open(
-    "D:/dev/python/Hierarchical-Localization/outputs/sfm/framlingham_loftr/transforms.json"
-) as f:
-    transforms = json.load(f)
+
+def eval_args():
+    args = sys.argv[sys.argv.index("--") + 1 :]
+    TRANSFORMS_FILE = Path(args[0])
+    if not (TRANSFORMS_FILE.exists()):
+        raise Exception(f"File not found: {TRANSFORMS_FILE}")
+
+    IMAGES_PATH = Path(args[1])
+    if not (IMAGES_PATH.exists()):
+        raise Exception(f"File not found: {IMAGES_PATH}")
+    return {"transforms": TRANSFORMS_FILE, "images": IMAGES_PATH}
 
 
 def get_cameras(match_name=None, parent=None):
@@ -28,20 +42,20 @@ def get_cameras(match_name=None, parent=None):
             continue
         cams.append(obj)
     return cams
-    return [
-        obj
-        for obj in bpy.context.scene.objects
-        if obj.type == "CAMERA" and obj.name == name.replace("**", obj.name)
-    ]
 
 
 # m2 is subset of m1 names! m1=GT, m2=SYNTH
 def map_cameras(m1, m2, data):
-    assert len(m1) == len(m2)
+    m2_names = [c.name.split(".")[0] for c in m2]
+    m1_names = [c.name.split(".")[0] for c in m1]
+    diff = set(m1_names) - set(m2_names)
+    if len(diff) > 0:
+        raise Exception(f"These cameras are missing in the estimated camera poses! {diff}")
+
     map = []
     for c1 in m1:
         for c2 in m2:
-            if c1.name in c2.name:
+            if c1.name in c2.name or ("MAIN" in c1.name and "MAIN" in c2.name):
                 print(f"INFO: matched {c1.name} and {c2.name}")
                 # append error
                 for frame in data["frames"]:
@@ -53,10 +67,6 @@ def map_cameras(m1, m2, data):
                 break
     assert len(m1) == len(map)
     return map
-
-
-MAX_REPROJECTION_ERROR_THESHOLD = 1.0
-MAX_CAMS = 3
 
 
 def get_top_cams(cam_map):
@@ -92,63 +102,25 @@ def helmert_transform(ground_truth_points, estimated_points):
     centered_gt = ground_truth_points - ground_truth_points[0]
     centered_est = estimated_points - estimated_points[0]
     scale = np.sqrt(np.sum(centered_gt**2) / np.sum(centered_est**2))
-    print("Scale:", scale)
+    #print("Scale:", scale)
 
     # Compute rotation using SVD
     H = np.dot(centered_est.T, centered_gt)
     U, _, Vt = np.linalg.svd(H)
     rotation = np.dot(Vt.T, U.T)
-    print("Initial Rotation Matrix:\n", rotation)
+    #print("Initial Rotation Matrix:\n", rotation)
 
     # Ensure a proper rotation matrix (det(R) = 1)
     if np.linalg.det(rotation) < 0:
         Vt[-1, :] *= -1
         rotation = np.dot(Vt.T, U.T)
-    print("Adjusted Rotation Matrix:\n", rotation)
+    #print("Adjusted Rotation Matrix:\n", rotation)
 
     # Compute translation
     translation = ground_truth_points[0] - scale * np.dot(rotation, estimated_points[0])
-    print("Translation:", translation)
+    #print("Translation:", translation)
 
     return scale, rotation, translation
-
-
-def calculate_local_rotation(C, P1_t1, P1_t2, R1_t1):
-    # Convert points to numpy vectors
-    C = Vector(C)
-    P1_t1 = Vector(P1_t1)
-    P1_t2 = Vector(P1_t2)
-
-    # Calculate vectors from center point C to P1_t1 and P1_t2
-    v_t1 = P1_t1 - C
-    v_t2 = P1_t2 - C
-
-    # Normalize the vectors
-    v_t1.normalize()
-    v_t2.normalize()
-
-    # Calculate the rotation axis (cross product of v_t1 and v_t2)
-    axis = v_t1.cross(v_t2)
-    axis.normalize()
-
-    # Calculate the rotation angle (dot product and arccos of normalized vectors)
-    angle = np.arccos(v_t1.dot(v_t2))
-
-    # Handle the case where vectors are parallel or anti-parallel
-    if axis.length == 0.0:
-        # No rotation needed if vectors are parallel
-        return Euler(R1_t1, "XYZ")
-
-    # Calculate rotation matrix using axis-angle
-    rotation_matrix = Matrix.Rotation(angle, 4, axis)
-
-    # Apply rotation to R1_t1
-    R1_t1_euler = Euler(R1_t1, "XYZ")
-    R1_t1_matrix = R1_t1_euler.to_matrix().to_4x4()
-    R1_t2_matrix = rotation_matrix @ R1_t1_matrix
-    R1_t2_euler = R1_t2_matrix.to_euler("XYZ")
-
-    return R1_t2_euler
 
 
 def apply_helmert_transform(points, scale, rotation, translation):
@@ -176,6 +148,13 @@ def align_estimated_to_ground_truth(est_cams, top_cams, apply_to=None):
     # Compute the Helmert transformation
     scale, rotation, translation = helmert_transform(gt_positions, est_positions)
 
+    try:
+        local_rot = Matrix(np.linalg.inv(rotation)).transposed().to_euler()
+    except np.linalg.LinAlgError as e:
+        raise Exception(
+            f"Failed to apply local rotation due to not inversible rotation matrix: {e}"
+        )
+
     # Apply the transformation to all estimated camera poses
     apply_to = est_cams if not apply_to else apply_to.all_objects
     for cam in apply_to:
@@ -184,30 +163,11 @@ def align_estimated_to_ground_truth(est_cams, top_cams, apply_to=None):
             est_position, scale, rotation, translation
         )
 
-        """
-        # Normalize points to the center
-        print(top_cams[0]["c2"].name)
-        center = Vector(est_positions[0].tolist())
-        old_pos_normalized = cam.location - center
-        new_pos_normalized = Vector(transformed_position) - center
-
-        loc_rot = calculate_local_rotation(
-            center, # pivot point
-            old_pos_normalized, # old pos relative to center
-            new_pos_normalized, # new pos relative to center
-            cam.rotation_euler # old rot
-        )
-        
-        cam.rotation_euler = loc_rot
-        """
-
+        # apply transform for new position
         cam.location = transformed_position
 
-        local_rot = Matrix(rotation).transposed().to_euler()
-        # print(local_rot, cam.rotation_euler)
+        # apply local rotation by calculating the inverse of the rotation matrix
         cam.rotation_euler.rotate(local_rot)
-
-        # apply_helmert_transform_blender(cam, scale, rotation, translation)
 
     print("Alignment complete")
 
@@ -216,6 +176,7 @@ def analyse_poses(cam_map):
     total_translation_error = 0.0
     total_rotation_error = 0.0
     num_cameras = len(cam_map)
+    analysed_poses = []
 
     for entry in cam_map:
         c1 = entry["c1"]
@@ -241,28 +202,216 @@ def analyse_poses(cam_map):
         rotation_error_deg = np.linalg.norm(euler_diff_deg)
         total_rotation_error += rotation_error_deg
 
-        print(f"Camera: {c1.name} -> {c2.name}")
-        print(f"  Translation Error: {translation_error:.3f} meters")
-        print(f"  Rotation Error: {rotation_error_deg:.3f} degrees")
-        print(f"  Reprojection Error: {entry['error']}")
+        print(f"Camera: {c1.name} -> {c2.name} - [t_err {translation_error:.3f} m] [r_err {rotation_error_deg:.3f} deg] [re_err {entry['error']:.3f}]")
+
+        analysed_poses.append(
+            {
+                "name": c1.name,
+                "t_err_m": translation_error,
+                "r_err_deg": rotation_error_deg,
+                "reprojection_err": entry["error"],
+            }
+        )
 
     avg_translation_error = total_translation_error / num_cameras
     avg_rotation_error = total_rotation_error / num_cameras
 
-    print("\nAverage Errors:")
-    print(f"  Average Translation Error: {avg_translation_error:.3f} meters")
-    print(f"  Average Rotation Error: {avg_rotation_error:.3f} degrees")
+    print(f"\nAverage Errors: - [t_err {avg_translation_error:.3f} m] [r_err {avg_rotation_error:.3f} deg]")
+
+    return {
+        "avg_translation_error": avg_translation_error,
+        "avg_rotation_error": avg_rotation_error,
+        "analysed_poses": analysed_poses,
+    }
 
 
-est_coll = bpy.data.collections.get("Collection 3")
-gt_coll = bpy.data.collections.get("Scene7")
-est_cams = get_cameras(parent=est_coll)
-gt_cams = get_cameras(parent=gt_coll)
+class SceneUtils:
+    BACKUP_SCENE_NAME = "BACKUP_SCENE"
 
-cam_map = map_cameras(gt_cams, est_cams, transforms)
-top_cams = get_top_cams(cam_map)
+    def __init__(self) -> None:
+        pass
 
-# Align estimated cameras to ground truth
-align_estimated_to_ground_truth(est_cams, top_cams)
+    def lock_scene_objects():
+        # Iterate through all objects in the current scene
+        for obj in bpy.context.scene.objects:
+            # Check if the object is a camera
+            # if obj.type == 'CAMERA':
+            # Lock transformations for location, rotation, and scale
+            obj.lock_location = (True, True, True)
+            obj.lock_rotation = (True, True, True)
+            obj.lock_scale = (True, True, True)
+        print("SceneUtils: locked all scene objects")
 
-analyse_poses(cam_map)
+    def backup_linked_scene():
+        # Get the name of the current scene
+        original_scene = bpy.context.scene
+        original_scene_name = original_scene.name
+
+        # Create a new scene for backup
+        bpy.ops.scene.new(type="EMPTY")
+        backup_scene = bpy.context.scene
+        backup_scene.name = SceneUtils.BACKUP_SCENE_NAME
+
+        # Link objects from the original scene to the backup scene
+        for obj in bpy.data.scenes[original_scene_name].objects:
+            backup_scene.collection.objects.link(obj)
+
+        bpy.context.window.scene = bpy.data.scenes[SceneUtils.BACKUP_SCENE_NAME]
+        print("SceneUtils: created scene backup")
+
+    def restore_scene():
+        backup_scene_name = SceneUtils.BACKUP_SCENE_NAME
+
+        # Check if the backup scene exists
+        if backup_scene_name in bpy.data.scenes:
+            bpy.data.scenes.remove(bpy.data.scenes[backup_scene_name])
+            print("SceneUtils: Original scene restored successfully!")
+        else:
+            print("SceneUtils: Backup scene not found!")
+
+
+def colmap_to_blender4(c2w):
+    # Conversion from COLMAP/OpenCV to Blender coordinate system
+    colmap_to_blender_transform = np.array(
+        [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1]]
+    )
+
+    # -90 degree rotation around the x-axis
+    rotation_neg_90_x = np.array(
+        [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]]
+    )
+
+    # Apply both transformations
+    return rotation_neg_90_x @ colmap_to_blender_transform @ c2w
+
+
+def adjust_scene(data):
+    w = data["w"]
+    h = data["h"]
+    bpy.context.scene.render.resolution_x = w
+    bpy.context.scene.render.resolution_y = h
+    return
+
+
+def draw_frames(data, image_path: Path):
+    # Extract the data
+    frames = data["frames"]
+
+    # FRAMES
+    for frame in frames:
+        # transform COLMAP coords to blender
+        blender_transform = colmap_to_blender4(frame["transform_matrix"])
+        transform_matrix = Matrix(blender_transform.tolist())
+
+        # Extract the position from the last column of the matrix
+        position = transform_matrix.translation
+
+        # Create a new camera
+        camera = bpy.data.cameras.new("Camera")
+        # Create a new object and link the camera to it
+        camera_obj = bpy.data.objects.new("Camera", camera)
+        bpy.context.collection.objects.link(camera_obj)
+        # Set the location of the camera object to the translation part of the matrix
+        camera_obj.location = position
+        # Set the rotation of the camera object to the rotation part of the matrix
+        camera_obj.rotation_euler = transform_matrix.to_euler("XYZ")
+        # Scale the camera object
+        # camera_obj.scale = (0.5, 0.5, 0.5)
+        camera_obj.name = frame["file_path"]
+        camera_obj.show_name = True
+
+        # set intrinsics
+        frame_metadata = frame["metadata"] if "metadata" in frame else None
+        if frame_metadata:
+            # Set the background image for the camera
+            # Set the path to your background image
+            background_image_path = image_path / frame["file_path"]
+            #print(background_image_path)
+            camera_obj.data.show_background_images = True
+            background_image = camera_obj.data.background_images.new()
+            background_image.image = bpy.data.images.load(
+                str(background_image_path.resolve())
+            )
+            # background_image.image.use_alpha = False  # Set to True if your image has an alpha channel
+
+            # other camera intrinsics
+            camera_obj.data.lens = (
+                "focal_length" in frame_metadata and frame_metadata["focal_length"]
+                if frame_metadata["focal_length"]
+                else float(DEFAULT_FOCAL_LENGTH)
+            )
+            camera_obj.data.sensor_width = (
+                frame_metadata["lens_sensor_size"]
+                if "lens_sensor_size" in frame_metadata
+                and frame_metadata["lens_sensor_size"]
+                else float(DEFAULT_SENSOR_WIDTH)
+            )
+
+
+def main(args):
+    TRANSFORMS_FILE = args["transforms"]
+    IMAGES_PATH = args["images"]
+    with open(
+        TRANSFORMS_FILE  # "D:/dev/python/Hierarchical-Localization/outputs/sfm/framlingham_loftr/transforms.json"
+    ) as f:
+        transforms = json.load(f)
+
+    SceneUtils.backup_linked_scene()
+    SceneUtils.lock_scene_objects()
+
+    try:
+        # new collection and set active to import frames here
+        est_coll = bpy.data.collections.new("IMPORT")
+        bpy.context.scene.collection.children.link(est_coll)
+        view_layer = bpy.context.view_layer
+        view_layer.active_layer_collection = view_layer.layer_collection.children[
+            est_coll.name
+        ]
+        # get gt cameras b4 import
+        gt_cams = get_cameras()
+
+        # start import
+        draw_frames(transforms, IMAGES_PATH)
+
+        # transformation
+        est_cams = get_cameras(parent=est_coll)
+
+        cam_map = map_cameras(gt_cams, est_cams, transforms)
+        top_cams = get_top_cams(cam_map)
+
+        # align estimated cameras to ground truth
+        align_estimated_to_ground_truth(est_cams, top_cams)
+
+        # analysis
+        analysis = analyse_poses(cam_map)
+        analysis_path = TRANSFORMS_FILE.parent.resolve()
+        with open(analysis_path / "stats.json", "w+", encoding="utf8") as f:
+            json.dump(analysis, f)
+    except Exception as e:
+        #raise Exception(e)
+        print(f"ERROR: {e}")
+    finally:
+        # restore scene
+        SceneUtils.restore_scene()
+    return 1
+
+
+if __name__ == "__main__":
+    """ parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--transforms",
+        type=Path,
+        required=True,
+        help="path to the transforms json file",
+    )
+
+    parser.add_argument(
+        "--images",
+        type=Path,
+        required=True,
+        help="path to the images",
+    )
+    args = parser.parse_args()
+    print(args) """
+    args = eval_args()
+    main(args)

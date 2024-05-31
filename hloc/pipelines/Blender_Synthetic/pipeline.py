@@ -21,7 +21,7 @@ from third_party.Neuralangelo.convert_data_to_json import data_to_json
 
 """
 Pipeline for testing multiple HLOC pipelines on multiple datasets
-call like this: python pipeline.py --dataset Bartholomew+evening_field_8k
+call like this: python pipeline.py --dataset Bartholomew+evening_field_8k --validator datasets/Bartholomew+evening_field_8k/test.blend
 """
 logging.basicConfig(format="  >> %(levelname)s: %(message)s", level=logging.INFO)
 log = logging.getLogger("HlocBlenderSynthPipeline")
@@ -52,7 +52,7 @@ config = [
         "matcher": "superglue",
         "name": "superpoint+superglue",
     },
-    {"extractor": "disk", "matcher": "disk+lightglue", "name": "disk+lightglue"},
+    {"matcher": "loftr", "name": "loftr"},
 ]
 
 
@@ -63,6 +63,7 @@ def ABORT(msg):
 
 
 def get_extractor_config(key):
+    if not key: return None
     return extract_features.confs.get(key, None)
 
 
@@ -100,7 +101,7 @@ def run_component(component, dataset) -> Path:
 
     OUT.mkdir(parents=True, exist_ok=True)
 
-    extractor_conf = get_extractor_config(component["extractor"])
+    extractor_conf = get_extractor_config(component.get("extractor", None))
     matcher_conf, is_dense = get_matcher_config(component["matcher"])
 
     IN = Path(ROOT / "datasets" / dataset)
@@ -111,8 +112,10 @@ def run_component(component, dataset) -> Path:
     # get image pairs
     pairs_from_all.main(sfm_pairs, IMAGES)
 
+    feature_path = None
     # extract features
-    feature_path = extract_features.main(extractor_conf, IMAGES, OUT)
+    if extractor_conf:
+        feature_path = extract_features.main(extractor_conf, IMAGES, OUT)
 
     # match features
     if is_dense:
@@ -155,7 +158,7 @@ def run_component(component, dataset) -> Path:
     return sfm_dir
 
 
-def run_analysis(blender_file: Path, transforms_json: Path):
+def run_analysis(blender_file: Path, transforms_json: Path, images_path: Path):
     subprocess.run(
         [
             "blender",
@@ -165,6 +168,7 @@ def run_analysis(blender_file: Path, transforms_json: Path):
             (ROOT / "analyse_dataset.py").resolve(),
             "--",  # script args
             transforms_json.resolve(),
+            images_path.resolve(),
         ],
         check=True,
     )
@@ -177,9 +181,7 @@ def main(args):
     dataset_path = ROOT / "datasets" / dataset_name
 
     if not dataset_path.exists():
-        ABORT(
-            "Please provide the path to the dataset containing 'images' and 'test.blend'"
-        )
+        ABORT("Please provide the path to the dataset containing 'images'")
 
     image_path = dataset_path / IMAGES_FOLDER_NAME
     if not image_path.exists():
@@ -187,12 +189,9 @@ def main(args):
             "Please provide an 'images' folder containing the images for reconstruction in the dataset"
         )
 
-    blender_file = dataset_path / "test.blend"
+    blender_file = args.validator
     if not blender_file.exists():
         ABORT("Please provide a blender file 'test.blend' for running stats")
-
-    """ if not (args.dataset.is_file() and args.dataset.name.split(".")[-1] == "blend"):
-        raise Exception("Provided dataset is not a .blend file") """
 
     log.info(f"Loaded dataset under {dataset_path}")
     log.info("Step 1: reconstructions")
@@ -200,8 +199,12 @@ def main(args):
         # implement timer!
         run_component(c, dataset_name)
 
-    # ds_analysis = analyse_dataset.main()
-    # run_analysis()
+    for c in config:
+        id = component_id(c, dataset_name)
+        out = ROOT / "out" / dataset_name / id / id
+        transforms_json = Path(out / "transforms.json").resolve()
+        images = Path(out / "images").resolve()
+        run_analysis(blender_file, transforms_json, images)
     return
 
 
@@ -212,6 +215,12 @@ if __name__ == "__main__":
         type=str,
         required=True,
         help="Name of the dataset in the 'dataset' folder",
+    )
+    parser.add_argument(
+        "--validator",
+        type=Path,
+        required=True,
+        help="Blender validation file path",
     )
     args = parser.parse_args()
     main(args)

@@ -182,7 +182,7 @@ def draw_frames(data):
         # Set the rotation of the camera object to the rotation part of the matrix
         camera_obj.rotation_euler = transform_matrix.to_euler("XYZ")
         # Scale the camera object
-        camera_obj.scale = (0.2, 0.2, 0.2)
+        #camera_obj.scale = (0.2, 0.2, 0.2)
         camera_obj.name = frame["file_path"]
         camera_obj.show_name = True
 
