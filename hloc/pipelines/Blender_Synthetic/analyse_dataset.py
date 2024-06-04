@@ -359,6 +359,9 @@ def main(args):
     SceneUtils.backup_linked_scene()
     SceneUtils.lock_scene_objects()
 
+    analysis = {}
+    analysis_path = TRANSFORMS_FILE.parent.resolve()
+
     try:
         # new collection and set active to import frames here
         est_coll = bpy.data.collections.new("IMPORT")
@@ -384,14 +387,17 @@ def main(args):
 
         # analysis
         analysis = analyse_poses(cam_map)
-        analysis_path = TRANSFORMS_FILE.parent.resolve()
-        with open(analysis_path / "stats.json", "w+", encoding="utf8") as f:
-            json.dump(analysis, f)
+        analysis["result"] = "ok"
+        analysis["message"] = "ok"
     except Exception as e:
         #raise Exception(e)
+        analysis["result"] = "error"
+        analysis["message"] = str(e)
         print(f"ERROR: {e}")
     finally:
         # restore scene
+        with open(analysis_path / "stats.json", "w+", encoding="utf8") as f:
+            json.dump(analysis, f)
         SceneUtils.restore_scene()
     return 1
 

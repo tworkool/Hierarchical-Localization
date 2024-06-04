@@ -21,14 +21,16 @@ from third_party.Neuralangelo.convert_data_to_json import data_to_json
 
 """
 Pipeline for testing multiple HLOC pipelines on multiple datasets
-call like this: python pipeline.py --dataset Bartholomew+evening_field_8k --validator datasets/Bartholomew+evening_field_8k/test.blend
+call like this: 
+* python pipeline.py --dataset Bartholomew+evening_field_8k --validator datasets/Bartholomew+evening_field_8k/test.blend
+* python pipeline.py --dataset Chateu-img1+evening_field_8k --validator datasets/Chateu-img1+evening_field_8k/chateu1.blend
 """
 logging.basicConfig(format="  >> %(levelname)s: %(message)s", level=logging.INFO)
 log = logging.getLogger("HlocBlenderSynthPipeline")
 ROOT = Path(__file__).parent.resolve()
 IMAGES_FOLDER_NAME = "images"
 
-config1 = [
+config = [
     {
         "extractor": "superpoint_max",
         "matcher": "superglue",
@@ -41,18 +43,44 @@ config1 = [
         "matcher": "superpoint+lightglue",
         "name": "superpoint+lightglue",
     },
-    {"extractor": "s2dnet", "matcher": "loftr", "name": "..."},  # TODO: add s2d
-    {"extractor": "r2d2", "matcher": "loftr", "name": "..."},  # TODO: add r2d2
+    #{"extractor": "s2dnet", "matcher": "loftr", "name": "..."},  # TODO: add s2d
+    #{"extractor": "r2d2", "matcher": "loftr", "name": "r2d2+loftr"},  # TODO: add r2d2
     # TODO: add HP (Does not work...)
 ]
 
-config = [
+config1 = [
     {
         "extractor": "superpoint_max",
         "matcher": "superglue",
         "name": "superpoint+superglue",
     },
-    {"matcher": "loftr", "name": "loftr"},
+]
+
+_datasets = [
+    (
+        "Bartholomew+evening_field_8k",
+        "datasets/Bartholomew+evening_field_8k/test.blend",
+    ),
+    (
+        "Chateu-img1+evening_field_8k",
+        "datasets/Chateu-img1+evening_field_8k/chateu1.blend",
+    ),
+    (
+        "Chateu-img2+evening_field_8k",
+        "datasets/Chateu-img2+evening_field_8k/chateu2.blend",
+    ),
+    (
+        "Chateu-img3+evening_field_8k",
+        "datasets/Chateu-img3+evening_field_8k/chateu3.blend",
+    ),
+    (
+        "Framlingham+evening_field_8k",
+        "datasets/Framlingham+evening_field_8k/framlingham.blend",
+    ),
+    (
+        "Pelegrina+evening_field_8k",
+        "datasets/Pelegrina+evening_field_8k/pelegrina.blend",
+    )
 ]
 
 
@@ -63,7 +91,8 @@ def ABORT(msg):
 
 
 def get_extractor_config(key):
-    if not key: return None
+    if not key:
+        return None
     return extract_features.confs.get(key, None)
 
 
@@ -179,17 +208,17 @@ def main(args):
     validate()
     dataset_name = args.dataset
     dataset_path = ROOT / "datasets" / dataset_name
+    image_path = dataset_path / IMAGES_FOLDER_NAME
+    blender_file = args.validator
 
     if not dataset_path.exists():
         ABORT("Please provide the path to the dataset containing 'images'")
 
-    image_path = dataset_path / IMAGES_FOLDER_NAME
     if not image_path.exists():
         ABORT(
             "Please provide an 'images' folder containing the images for reconstruction in the dataset"
         )
 
-    blender_file = args.validator
     if not blender_file.exists():
         ABORT("Please provide a blender file 'test.blend' for running stats")
 
@@ -199,10 +228,15 @@ def main(args):
         # implement timer!
         run_component(c, dataset_name)
 
+    log.info("Step 2: analysis")
     for c in config:
         id = component_id(c, dataset_name)
         out = ROOT / "out" / dataset_name / id / id
         transforms_json = Path(out / "transforms.json").resolve()
+        stats_json = Path(out / "stats.json").resolve()  # saved stats
+        if stats_json.exists():
+            log.info(f"  SKIPPING Analysis - {id}")
+            continue
         images = Path(out / "images").resolve()
         run_analysis(blender_file, transforms_json, images)
     return
@@ -213,14 +247,21 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        required=True,
+        required=False,
         help="Name of the dataset in the 'dataset' folder",
     )
     parser.add_argument(
         "--validator",
         type=Path,
-        required=True,
+        required=False,
         help="Blender validation file path",
     )
     args = parser.parse_args()
-    main(args)
+    if not args.dataset or not args.validator:
+        # if not set, use datasets provided in this file
+        for ds in _datasets:
+            args.dataset = ds[0]
+            args.validator = ROOT / ds[1]
+            main(args)
+    else:
+        main(args)
