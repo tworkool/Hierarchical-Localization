@@ -11,13 +11,18 @@ logger = logging.getLogger(__name__)
 def parse_image_list_dir(
     path: Path,
     image_extensions={".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"},
+    recursive=True
 ):
-    # Get all files in the directory and its subdirectories
-    all_files = path.rglob("*")
+    if recursive:
+        # Get all files in the directory and its subdirectories
+        all_files = path.rglob("*")
+    else:
+        all_files = path.glob("*")
     # Filter image files by their extensions, case-insensitively
     image_files = [
         file for file in all_files if file.suffix.lower() in image_extensions
     ]
+    print(image_files)
     # Convert to absolute paths
     #images = [str(file.resolve()) for file in image_files]
     images = [str(file.name) for file in image_files]

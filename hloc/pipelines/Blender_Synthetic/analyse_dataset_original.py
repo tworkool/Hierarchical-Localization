@@ -41,7 +41,9 @@ def map_cameras(m1, m2, data):
     m1_names = [c.name.split(".")[0] for c in m1]
     diff = set(m1_names) - set(m2_names)
     if len(diff) > 0:
-        raise Exception(f"These cameras are missing in the estimated camera poses! {diff}")
+        print(f"These cameras are missing in the estimated camera poses! {diff}")
+        #if "MAIN" in diff: # improve this! should be LIKE and not hard match
+        #    raise Exception(f"These cameras are missing in the estimated camera poses! {diff}")
 
     map = []
     for c1 in m1:
@@ -49,14 +51,31 @@ def map_cameras(m1, m2, data):
             if c1.name in c2.name or ("MAIN" in c1.name and "MAIN" in c2.name):
                 print(f"INFO: matched {c1.name} and {c2.name}")
                 # append error
+                mapped_item = None
                 for frame in data["frames"]:
                     f_name = frame["file_path"]
                     if f_name == c2.name:
                         print(f"INFO: added error metric for {c2.name} from frame")
-                        map.append({"c1": c1, "c2": c2, "error": frame["error"]})
+                        mapped_item = {"c1": c1, "c2": c2, "error": frame["error"]}
                         break
+                if not mapped_item:
+                    # in case error not found, just add a large error
+                    mapped_item = {"c1": c1, "c2": c2, "error": 1337}
+                map.append(mapped_item)
                 break
-    assert len(m1) == len(map)
+    #assert len(m1) == len(map), "gt poses and est poses could not be mapped"
+
+    missing_main_cam = True
+    for e in map:
+        c1 = e["c1"]
+        c2 = e["c2"]
+        if "MAIN" in c1.name or "MAIN" in c2.name:
+            missing_main_cam = False
+            break
+
+    if missing_main_cam:
+        raise Exception(f"Main camera could not be found in localization")
+    
     return map
 
 

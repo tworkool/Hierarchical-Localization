@@ -13,9 +13,14 @@ from hloc import (
     pairs_from_all,
     triangulation,
     reconstruction,
+    pairs_from_exhaustive,
 )
 
+from hloc.utils.parsers import parse_image_list_dir
 from third_party.Neuralangelo.convert_data_to_json import data_to_json
+import pycolmap
+from hloc.localize_sfm import QueryLocalizer, pose_from_cluster
+import numpy as np
 
 # from hloc.pipelines.Blender_Synthetic import analyse_dataset
 
@@ -43,18 +48,26 @@ config = [
         "matcher": "superpoint+lightglue",
         "name": "superpoint+lightglue",
     },
-    #{"extractor": "s2dnet", "matcher": "loftr", "name": "..."},  # TODO: add s2d
-    #{"extractor": "r2d2", "matcher": "loftr", "name": "r2d2+loftr"},  # TODO: add r2d2
+    {"extractor": "r2d2", "matcher": "NN-ratio", "name": "r2d2+nn_ratio"},
+    #{
+    #    "extractor": "s2dnet",
+    #    "matcher": "NN-ratio",
+    #    "name": "s2d+nn_ratio",
+    #},  # TODO: add s2d
     # TODO: add HP (Does not work...)
 ]
 
-config1 = [
+"""
+config = [
     {
         "extractor": "superpoint_max",
         "matcher": "superglue",
         "name": "superpoint+superglue",
     },
 ]
+
+_datasets = [("framlingham2", "datasets/framlingham2/framlingham.blend")]
+"""
 
 _datasets = [
     (
@@ -80,7 +93,7 @@ _datasets = [
     (
         "Pelegrina+evening_field_8k",
         "datasets/Pelegrina+evening_field_8k/pelegrina.blend",
-    )
+    ),
 ]
 
 
@@ -102,6 +115,10 @@ def get_matcher_config(key):
     return (config, is_dense)
 
 
+def is_loc_dataset(ds: Path):
+    return (ds / "images" / "query").exists()
+
+
 def validate():
     required_keys = ["matcher", "name"]
     for c in config:
@@ -120,6 +137,23 @@ def component_id(component: dict, dataset_name: str):
     return f'{dataset_name}-{component["name"]}'
 
 
+# temporary construct for images processed in transform file generator
+class TempImage:
+    def __init__(self, qvec, tvec, name, point3d_ids=None):
+        self.qvec = np.array(qvec)
+        self.tvec = np.array(tvec)
+        self.name = name
+        if point3d_ids:
+            self.point3D_ids = point3d_ids
+
+    def todict(self):
+        return {
+            "qvec": self.qvec,
+            "tvec": self.tvec,
+            "name": self.name,
+        }
+
+
 # runs selected component on dataset
 def run_component(component, dataset) -> Path:
     id = component_id(component, dataset)
@@ -127,6 +161,8 @@ def run_component(component, dataset) -> Path:
     if OUT.exists():
         log.info(f"  SKIPPING Component - '{id}' already ran for dataset '{dataset}'")
         return None
+
+    log.info(f"  RUNNING Component - '{id}' for dataset '{dataset}'")
 
     OUT.mkdir(parents=True, exist_ok=True)
 
@@ -139,7 +175,9 @@ def run_component(component, dataset) -> Path:
     sfm_dir = OUT / id
 
     # get image pairs
-    pairs_from_all.main(sfm_pairs, IMAGES)
+    pairs_from_all.main(
+        sfm_pairs, IMAGES, recursive=False
+    )  # IMPORTANT: non recursive to only load first layer
 
     feature_path = None
     # extract features
@@ -166,15 +204,70 @@ def run_component(component, dataset) -> Path:
     # start reconstruction
     model = reconstruction.main(sfm_dir, IMAGES, sfm_pairs, feature_path, match_path)
 
-    # TODO: localization pipeline?
-
-    # export transforms and copy images
+    # export transforms args
     args = {
         "data_dir": str(sfm_dir.resolve()),
         "scene_type": "outdoor",
         "image_dir": str(IMAGES.resolve()),
         "name": "transforms.json",
     }
+
+    # TODO: localization pipeline?
+    if is_loc_dataset(IN):
+        # apply localization
+        QUERY_IMAGE_PATH = IMAGES / "query"
+        QUERY_IMAGE = parse_image_list_dir(QUERY_IMAGE_PATH, recursive=False)
+        if len(QUERY_IMAGE) == 0:
+            raise Exception("no query images found")
+        QUERY_IMAGE = f"query/{QUERY_IMAGE[0]}"
+
+        references_registered = [model.images[i].name for i in model.reg_image_ids()]
+
+        # extract features and match query image again
+        extract_features.main(
+            extractor_conf,
+            IMAGES,
+            image_list=[QUERY_IMAGE],
+            feature_path=feature_path,
+            overwrite=True,
+        )
+        pairs_from_exhaustive.main(
+            sfm_pairs, image_list=[QUERY_IMAGE], ref_list=references_registered
+        )
+        match_features.main(
+            matcher_conf,
+            sfm_pairs,
+            features=feature_path,
+            matches=match_path,
+            overwrite=True,
+        )
+
+        # register new camera and localize it
+        camera = pycolmap.infer_camera_from_image(IMAGES / QUERY_IMAGE)
+        ref_ids = [
+            model.find_image_with_name(n).image_id for n in references_registered
+        ]
+        conf = {
+            "estimation": {"ransac": {"max_error": 12}},
+            "refinement": {"refine_focal_length": True, "refine_extra_params": True},
+        }
+        localizer = QueryLocalizer(model, conf)
+        ret, output_log = pose_from_cluster(
+            localizer, QUERY_IMAGE, camera, ref_ids, feature_path, match_path
+        )
+
+        # extract localized camera
+        localized_image = TempImage(
+            ret["cam_from_world"].rotation.todict()[
+                "quat"
+            ],  # do this to as a workaround to extract numpy array instead of Rotation3D quaternion
+            ret["cam_from_world"].translation,
+            QUERY_IMAGE,
+            None,  # [i + 1 if e else -1 for i, e in enumerate(ret["inliers"])],
+        )
+        args["extra_cam"] = localized_image
+
+    # export transforms and copy images
     data_to_json(args)
 
     sfm_images = sfm_dir / IMAGES_FOLDER_NAME
@@ -188,6 +281,13 @@ def run_component(component, dataset) -> Path:
 
 
 def run_analysis(blender_file: Path, transforms_json: Path, images_path: Path):
+    if not blender_file.exists():
+        raise Exception("Blender file missing")
+    if not transforms_json.exists():
+        raise Exception("Transforms file missing")
+    if not images_path.exists():
+        raise Exception("Images path missing")
+
     subprocess.run(
         [
             "blender",
@@ -226,7 +326,10 @@ def main(args):
     log.info("Step 1: reconstructions")
     for c in config:
         # implement timer!
-        run_component(c, dataset_name)
+        try:
+            run_component(c, dataset_name)
+        except Exception as E:
+            log.error(f"  There was a problem with the component run: {E}")
 
     log.info("Step 2: analysis")
     for c in config:
@@ -234,11 +337,16 @@ def main(args):
         out = ROOT / "out" / dataset_name / id / id
         transforms_json = Path(out / "transforms.json").resolve()
         stats_json = Path(out / "stats.json").resolve()  # saved stats
-        if stats_json.exists():
+        if stats_json.exists() and not args.overwrite_analysis:
             log.info(f"  SKIPPING Analysis - {id}")
             continue
+
+        log.info(f"  RUNNING Analysis - {id}")
         images = Path(out / "images").resolve()
-        run_analysis(blender_file, transforms_json, images)
+        try:
+            run_analysis(blender_file, transforms_json, images)
+        except Exception as E:
+            log.error(f"  There was a problem with the component analysis: {E}")
     return
 
 
@@ -255,6 +363,13 @@ if __name__ == "__main__":
         type=Path,
         required=False,
         help="Blender validation file path",
+    )
+    parser.add_argument(
+        "--overwrite_analysis",
+        type=bool,
+        required=False,
+        help="Overwrite Analysis Results",
+        default=False
     )
     args = parser.parse_args()
     if not args.dataset or not args.validator:

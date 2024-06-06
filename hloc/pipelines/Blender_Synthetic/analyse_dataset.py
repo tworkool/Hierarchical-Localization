@@ -1,13 +1,9 @@
 import json
 import bpy
 import sys
-from random import uniform
-import time
 import numpy as np
 import re
-from pprint import pp
-from mathutils import Matrix, Euler, Quaternion, Vector
-import bmesh
+from mathutils import Matrix
 import argparse
 from pathlib import Path
 
@@ -16,7 +12,7 @@ transforms = None
 DEFAULT_FOCAL_LENGTH = 27
 DEFAULT_SENSOR_WIDTH = 35
 MAX_REPROJECTION_ERROR_THESHOLD = 1.0  # warning if avg is above
-MAX_CAMS = 3  # for transformation alignment
+MAX_CAMS = 10  # for transformation alignment
 
 
 def eval_args():
@@ -44,57 +40,76 @@ def get_cameras(match_name=None, parent=None):
     return cams
 
 
+def is_main_cam(cam_map_item):
+    return "MAIN" in cam_map_item["c1"].name or "MAIN" in cam_map_item["c2"].name
+
 # m2 is subset of m1 names! m1=GT, m2=SYNTH
 def map_cameras(m1, m2, data):
     m2_names = [c.name.split(".")[0] for c in m2]
     m1_names = [c.name.split(".")[0] for c in m1]
     diff = set(m1_names) - set(m2_names)
     if len(diff) > 0:
-        raise Exception(f"These cameras are missing in the estimated camera poses! {diff}")
+        print(f"These cameras are missing in the estimated camera poses! {diff}")
+        #if "MAIN" in diff: # improve this! should be LIKE and not hard match
+        #    raise Exception(f"These cameras are missing in the estimated camera poses! {diff}")
 
     map = []
     for c1 in m1:
         for c2 in m2:
             if c1.name in c2.name or ("MAIN" in c1.name and "MAIN" in c2.name):
-                print(f"INFO: matched {c1.name} and {c2.name}")
+                #print(f"INFO: matched {c1.name} and {c2.name}")
                 # append error
+                mapped_item = None
                 for frame in data["frames"]:
                     f_name = frame["file_path"]
                     if f_name == c2.name:
-                        print(f"INFO: added error metric for {c2.name} from frame")
-                        map.append({"c1": c1, "c2": c2, "error": frame["error"]})
+                        #print(f"INFO: added error metric for {c2.name} from frame")
+                        mapped_item = {"c1": c1, "c2": c2, "error": frame["error"]}
                         break
+                if not mapped_item:
+                    # in case error not found, just add a large error
+                    mapped_item = {"c1": c1, "c2": c2, "error": 1337}
+                map.append(mapped_item)
                 break
-    assert len(m1) == len(map)
+    #assert len(m1) == len(map), "gt poses and est poses could not be mapped"
+
+    missing_main_cam = True
+    for e in map:
+        if is_main_cam(e):
+            missing_main_cam = False
+            break
+
+    if missing_main_cam:
+        raise Exception(f"Main camera could not be found in localization")
+    
     return map
 
 
 def get_top_cams(cam_map):
     sorted_cams = sorted(cam_map, key=lambda x: x["error"])
-    if len(cam_map) < MAX_CAMS:
-        print(
-            "cannot select top cameras for optimal alignment. There need to be at least N cameras available!"
-        )
-    else:
-        sorted_cams = sorted_cams[:MAX_CAMS]
-    mean_error = np.asarray([x["error"] for x in sorted_cams]).mean()
+    sorted_cams = [i for i in sorted_cams if not is_main_cam(i)] # filter out main cam
+    
+    filtered_cams = []
+    max_error_threshold = MAX_REPROJECTION_ERROR_THESHOLD
+    it_increase = 0.05
+    it = 1
+    # try to find at least MAX_CAMS which have low reprojection error
+    while True:
+        filtered_cams = [c for c in sorted_cams if c["error"] < max_error_threshold]
+        if len(filtered_cams) >= MAX_CAMS:
+            break
+        it += 1
+        max_error_threshold += it_increase
+
+    mean_error = np.asarray([x["error"] for x in filtered_cams]).mean()
+    print(f"INFO: found {len(filtered_cams)} with mean error of {mean_error} after {it} iterations with an increase in error of {max_error_threshold - MAX_REPROJECTION_ERROR_THESHOLD}px")
+        
     if mean_error > MAX_REPROJECTION_ERROR_THESHOLD:
         print(
             f"WARNING: camera exceeds max error theshold and could lead to inaccurately aligned cameras: {mean_error}"
         )
 
-    c1c2_d = (sorted_cams[0]["c2"].location - sorted_cams[1]["c2"].location).length
-    c1c3_d = (sorted_cams[0]["c2"].location - sorted_cams[2]["c2"].location).length
-    if c1c3_d > c1c2_d:
-        # switch sorted cams location so that the second cam is further away
-        # further distance = finer scaling
-        sorted_cams[1], sorted_cams[2] = sorted_cams[2], sorted_cams[1]
-
-    # 1: set position of first cam to GT first cam
-    # 2: scale to fit 2nd cam with GT 2nd cam
-    # 3: rotate to fit 2nd cam with GT 2nd cam
-    # 4: rotate to fit 3rd cam with GT 3rd cam
-    return sorted_cams
+    return filtered_cams
 
 
 def helmert_transform(ground_truth_points, estimated_points):
@@ -121,23 +136,44 @@ def helmert_transform(ground_truth_points, estimated_points):
     #print("Translation:", translation)
 
     return scale, rotation, translation
+    
+def helmert_transform_averaged(ground_truth_points, estimated_points):
+    # Compute centroids
+    centroid_gt = np.mean(ground_truth_points, axis=0)
+    centroid_est = np.mean(estimated_points, axis=0)
+    #print("Ground Truth Centroid:", centroid_gt)
+    #print("Estimated Points Centroid:", centroid_est)
+
+    # Center the points around the centroids
+    centered_gt = ground_truth_points - centroid_gt
+    centered_est = estimated_points - centroid_est
+
+    # Compute scale
+    scale = np.sqrt(np.sum(centered_gt**2) / np.sum(centered_est**2))
+    #print("Scale:", scale)
+
+    # Compute rotation using SVD
+    H = np.dot(centered_est.T, centered_gt)
+    U, _, Vt = np.linalg.svd(H)
+    rotation = np.dot(Vt.T, U.T)
+    #print("Initial Rotation Matrix:\n", rotation)
+
+    # Ensure a proper rotation matrix (det(R) = 1)
+    if np.linalg.det(rotation) < 0:
+        Vt[-1, :] *= -1
+        rotation = np.dot(Vt.T, U.T)
+    #print("Adjusted Rotation Matrix:\n", rotation)
+
+    # Compute translation
+    translation = centroid_gt - scale * np.dot(rotation, centroid_est)
+    #print("Translation:", translation)
+
+    return scale, rotation, translation
 
 
 def apply_helmert_transform(points, scale, rotation, translation):
     transformed_points = scale * np.dot(points, rotation.T) + translation
     return transformed_points
-
-
-def apply_helmert_transform_blender(cam, scale, rotation, translation):
-    # Apply the scale, rotation, and translation to the camera location using Blender's API
-    est_position = np.array(cam.location)
-    transformed_position = scale * np.dot(rotation, est_position) + translation
-    cam.location = transformed_position
-
-    # Convert the rotation matrix to Euler angles and set the rotation
-    rotation_matrix = Matrix(rotation).transposed()  # Transpose the rotation matrix
-    rotation_euler = rotation_matrix.to_euler()
-    cam.rotation_euler = rotation_euler
 
 
 def align_estimated_to_ground_truth(est_cams, top_cams, apply_to=None):
@@ -146,7 +182,7 @@ def align_estimated_to_ground_truth(est_cams, top_cams, apply_to=None):
     est_positions = np.array([cam["c2"].location for cam in top_cams])
 
     # Compute the Helmert transformation
-    scale, rotation, translation = helmert_transform(gt_positions, est_positions)
+    scale, rotation, translation = helmert_transform_averaged(gt_positions, est_positions)
 
     try:
         local_rot = Matrix(np.linalg.inv(rotation)).transposed().to_euler()
@@ -169,7 +205,7 @@ def align_estimated_to_ground_truth(est_cams, top_cams, apply_to=None):
         # apply local rotation by calculating the inverse of the rotation matrix
         cam.rotation_euler.rotate(local_rot)
 
-    print("Alignment complete")
+    #print("Alignment complete")
 
 
 def analyse_poses(cam_map):

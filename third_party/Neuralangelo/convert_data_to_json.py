@@ -161,6 +161,7 @@ def _cv_to_gl(cv):
 
 
 def calculate_mean_frame_error(img, pts):
+    if "point3D_ids" not in dir(img): return 999999
     frame_error_sum = 0
     frame_pts = 0
     skipped_pts = 0
@@ -241,6 +242,11 @@ def export_to_json(
         c2w = np.linalg.inv(w2c)
         c2w = _cv_to_gl(c2w)  # convert to GL convention used in iNGP
 
+        if "query/" in img.name:
+            # handle query image transform
+            transform1 = np.array([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+            c2w = transform1 @ c2w
+
         frame_err = calculate_mean_frame_error(img, points3D)
         print(f"frame reprojection error for image ID {img_id}: {round(frame_err, 3)}")
 
@@ -284,6 +290,11 @@ def export_to_json(
 
 def data_to_json(args: dict):
     cameras, images, points3D = read_model(args.get("data_dir"), ext=".bin")
+
+    if "extra_cam" in args:
+        # append extra localized camera which is not in COLMAP
+        # expects qvec, tvec and name properties
+        images[1337] = args["extra_cam"]
 
     # define bounding regions based on scene type
     if args.get("scene_type") == "outdoor":

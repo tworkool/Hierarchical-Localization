@@ -8,9 +8,10 @@ from .utils.parsers import parse_image_list_dir
 def main(
     output: Path,
     image_list: Path,
+    recursive: bool = True
 ):
     if image_list is not None:
-        names_q = parse_image_list_dir(image_list)
+        names_q = parse_image_list_dir(image_list, recursive=recursive)
     else:
         raise ValueError(f"Unknown type for image list: {image_list}")
 
@@ -29,5 +30,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--image_list", required=True, type=Path)
+    parser.add_argument("--recursive", required=False, type=bool, default=True)
     args = parser.parse_args()
     main(**args.__dict__)
