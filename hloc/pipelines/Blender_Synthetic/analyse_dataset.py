@@ -102,7 +102,7 @@ def get_top_cams(cam_map):
         max_error_threshold += it_increase
 
     mean_error = np.asarray([x["error"] for x in filtered_cams]).mean()
-    print(f"INFO: found {len(filtered_cams)} with mean error of {mean_error} after {it} iterations with an increase in error of {max_error_threshold - MAX_REPROJECTION_ERROR_THESHOLD}px")
+    print(f"INFO: found {len(filtered_cams)} with mean error of {mean_error} after {it} iterations with an increase in error of {(max_error_threshold - MAX_REPROJECTION_ERROR_THESHOLD):.3f}px")
         
     if mean_error > MAX_REPROJECTION_ERROR_THESHOLD:
         print(

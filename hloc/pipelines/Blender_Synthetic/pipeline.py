@@ -202,6 +202,8 @@ def run_component(component, dataset) -> Path:
         )
 
     # start reconstruction
+    # TODO: run post-init SQL command to set prior_focal_length in MAIN cam to "1.25 * max(width_in_px, height_in_px)"
+    # as described in https://colmap.github.io/tutorial.html#feature-detection-and-extraction
     model = reconstruction.main(sfm_dir, IMAGES, sfm_pairs, feature_path, match_path)
 
     # export transforms args
