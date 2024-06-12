@@ -246,6 +246,7 @@ def analyse_poses(cam_map):
                 "t_err_m": translation_error,
                 "r_err_deg": rotation_error_deg,
                 "reprojection_err": entry["error"],
+                "ground_distance_m": c2.location.z,
             }
         )
 
@@ -302,8 +303,8 @@ class SceneUtils:
         if backup_scene_name in bpy.data.scenes:
             bpy.data.scenes.remove(bpy.data.scenes[backup_scene_name])
             print("SceneUtils: Original scene restored successfully!")
-        else:
-            print("SceneUtils: Backup scene not found!")
+            return True
+        return False
 
 
 def colmap_to_blender4(c2w):
@@ -392,6 +393,11 @@ def main(args):
     ) as f:
         transforms = json.load(f)
 
+    restored = SceneUtils.restore_scene()
+    # clear scene
+    if restored:
+        bpy.ops.outliner.orphans_purge(do_recursive=True)
+    
     SceneUtils.backup_linked_scene()
     SceneUtils.lock_scene_objects()
 
@@ -421,20 +427,41 @@ def main(args):
         # align estimated cameras to ground truth
         align_estimated_to_ground_truth(est_cams, top_cams)
 
+        # set render resolution to localized camera metadata
+        aspect_ratio = 1
+        for frame in transforms["frames"]:
+            if "main" in frame["file_path"].lower() and "metadata" in frame and "w" in frame["metadata"] and "h" in frame["metadata"]:
+                adjust_scene(frame["metadata"])
+                aspect_ratio = frame["metadata"]["w"] / frame["metadata"]["h"]
+                break
+        for e in cam_map:
+            if is_main_cam(e):
+                loc_cam = e["c2"]
+                loc_cam.data.lens = 30
+                loc_cam.data.sensor_width = 35
+                loc_cam.data.sensor_height = 35
+                # set sensor to auto to calculate width and height manually
+                #loc_cam.data.sensor_fit = "AUTO"
+                #loc_cam.data.sensor_width = 35
+                #loc_cam.data.sensor_height = loc_cam.data.sensor_width / aspect_ratio
+                break
+
         # analysis
         analysis = analyse_poses(cam_map)
         analysis["result"] = "ok"
         analysis["message"] = "ok"
+        print("saving file")
+        bpy.ops.wm.save_mainfile()
     except Exception as e:
-        #raise Exception(e)
         analysis["result"] = "error"
         analysis["message"] = str(e)
-        print(f"ERROR: {e}")
+        import traceback
+        print(f"ERROR: {e}\n\n{traceback.format_exc()}")
     finally:
         # restore scene
         with open(analysis_path / "stats.json", "w+", encoding="utf8") as f:
             json.dump(analysis, f)
-        SceneUtils.restore_scene()
+        #SceneUtils.restore_scene()
     return 1
 
 

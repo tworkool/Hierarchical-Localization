@@ -36,13 +36,6 @@ confs = {
             "features": "disk",
         },
     },
-    "netvlad+superglue": {
-        "output": "matches-netvlad-superglue",
-        "model": {
-            "name": "superglue",
-            "features": "netvlad",
-        },
-    },
     "superglue": {
         "output": "matches-superglue",
         "model": {

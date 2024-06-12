@@ -5,7 +5,8 @@ import cv2
 import h5py
 import numpy as np
 
-from .parsers import names_to_pair, names_to_pair_old
+from .parsers import names_to_pair, names_to_pair_old, parse_retrieval
+from .colmap import read_cameras_binary
 
 
 def read_image(path, grayscale=False):
@@ -76,3 +77,75 @@ def get_matches(path: Path, name0: str, name1: str) -> Tuple[np.ndarray]:
         matches = np.flip(matches, -1)
     scores = scores[idx]
     return matches, scores
+
+def generate_query_list(colmap_cameras_path: Path, output_path: Path):
+    cameras = read_cameras_binary(colmap_cameras_path)
+    with open(output_path, "w+") as f:
+        for camera_id, camera in cameras.items():
+            # Extract the necessary parameters
+            model = camera.model
+            width = camera.width
+            height = camera.height
+            params = camera.params
+
+            # For the SIMPLE_RADIAL model, params = [f, cx, cy, k]
+            if model == "SIMPLE_RADIAL":
+                fx = params[0]
+                cx = params[1]
+                cy = params[2]
+                k = params[3]
+            else:
+                raise ValueError(f"Unsupported camera model: {model}")
+
+            # Write to the query list file
+            f.write(f"{camera_id} {model} {width} {height} {fx} {cx} {cy} {k}\n")
+
+def generate_query_list(colmap_cameras, image_names, output_path: Path):
+    assert len(colmap_cameras) == len(image_names)
+    cameras = colmap_cameras
+    with open(output_path, "w+") as f:
+        for i, camera in enumerate(cameras):
+            # Extract the necessary parameters
+            model = str(camera.model).replace("CameraModelId.", "")
+            width = camera.width
+            height = camera.height
+            params = camera.params
+
+            # For the SIMPLE_RADIAL model, params = [f, cx, cy, k]
+            if model == "SIMPLE_RADIAL":
+                fx = params[0]
+                cx = params[1]
+                cy = params[2]
+                k = params[3]
+            else:
+                raise ValueError(f"Unsupported camera model: {model}")
+
+            # Write to the query list file
+            f.write(f"{image_names[i]} {model} {width} {height} {fx} {cx} {cy} {k}\n")
+
+
+def generate_localization_pairs(reloc, num, ref_pairs, out_path):
+    """Create the matching pairs for the localization.
+    We simply lookup the corresponding reference frame
+    and extract its `num` closest frames from the existing pair list.
+    """
+    relocs = [reloc]
+    query_to_ref_ts = {}
+    for reloc in relocs:
+        with open(reloc, "r") as f:
+            for line in f.readlines():
+                line = line.rstrip("\n")
+                if line[0] == "#" or line == "":
+                    continue
+                ref_ts, q_ts = line.split()[:2]
+                query_to_ref_ts[q_ts] = ref_ts
+
+    ts_to_name = "cam0/{}.png".format
+    ref_pairs = parse_retrieval(ref_pairs)
+    loc_pairs = []
+    for q_ts, ref_ts in query_to_ref_ts.items():
+        ref_name = ts_to_name(ref_ts)
+        selected = [ref_name] + ref_pairs[ref_name][: num - 1]
+        loc_pairs.extend([" ".join((ts_to_name(q_ts), s)) for s in selected])
+    with open(out_path, "w") as f:
+        f.write("\n".join(loc_pairs))

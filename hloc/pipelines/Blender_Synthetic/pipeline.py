@@ -3,6 +3,7 @@ import argparse
 import logging
 import shutil
 import subprocess
+import traceback
 
 from hloc import (
     extract_features,
@@ -14,6 +15,7 @@ from hloc import (
     triangulation,
     reconstruction,
     pairs_from_exhaustive,
+    pairs_from_retrieval,
 )
 
 from hloc.utils.parsers import parse_image_list_dir
@@ -49,11 +51,17 @@ config = [
         "name": "superpoint+lightglue",
     },
     {"extractor": "r2d2", "matcher": "NN-ratio", "name": "r2d2+nn_ratio"},
-    #{
+    # {
+    #    "extractor": "superpoint_max",
+    #    "matcher": "loftr_superpoint",
+    #    "name": "superpoint+loftr",
+    # },
+    # {"extractor": "d2net-ss", "matcher": "NN-ratio", "name": "d2net+nn_ratio"},
+    # {
     #    "extractor": "s2dnet",
     #    "matcher": "NN-ratio",
     #    "name": "s2d+nn_ratio",
-    #},  # TODO: add s2d
+    # },  # TODO: add s2d
     # TODO: add HP (Does not work...)
 ]
 
@@ -69,7 +77,14 @@ config = [
 _datasets = [("framlingham2", "datasets/framlingham2/framlingham.blend")]
 """
 
-_datasets = [
+datasets_loc = [
+    (
+        "LOC-Bartholomew+evening_field_8k",
+        "datasets/LOC-Bartholomew+evening_field_8k/test.blend",
+    )
+]
+
+datasets_sfm = [
     (
         "Bartholomew+evening_field_8k",
         "datasets/Bartholomew+evening_field_8k/test.blend",
@@ -158,13 +173,13 @@ class TempImage:
 def run_component(component, dataset) -> Path:
     id = component_id(component, dataset)
     OUT = Path(ROOT / "out" / dataset / id)
+    LOC_CHECKPOINT = OUT / ".LOC_CHECKPOINT"
+
     if OUT.exists():
         log.info(f"  SKIPPING Component - '{id}' already ran for dataset '{dataset}'")
         return None
 
     log.info(f"  RUNNING Component - '{id}' for dataset '{dataset}'")
-
-    OUT.mkdir(parents=True, exist_ok=True)
 
     extractor_conf = get_extractor_config(component.get("extractor", None))
     matcher_conf, is_dense = get_matcher_config(component["matcher"])
@@ -172,7 +187,9 @@ def run_component(component, dataset) -> Path:
     IN = Path(ROOT / "datasets" / dataset)
     IMAGES = Path(IN / IMAGES_FOLDER_NAME)
     sfm_pairs = OUT / f"{id}-pairs.txt"
-    sfm_dir = OUT / id
+    sfm_dir = OUT / id  # "sparse"
+
+    OUT.mkdir(parents=True, exist_ok=True)
 
     # get image pairs
     pairs_from_all.main(
@@ -204,7 +221,13 @@ def run_component(component, dataset) -> Path:
     # start reconstruction
     # TODO: run post-init SQL command to set prior_focal_length in MAIN cam to "1.25 * max(width_in_px, height_in_px)"
     # as described in https://colmap.github.io/tutorial.html#feature-detection-and-extraction
-    model = reconstruction.main(sfm_dir, IMAGES, sfm_pairs, feature_path, match_path)
+    model = reconstruction.main(
+        sfm_dir=sfm_dir,
+        image_dir=IMAGES,
+        pairs=sfm_pairs,
+        features=feature_path,
+        matches=match_path,
+    )
 
     # export transforms args
     args = {
@@ -216,6 +239,9 @@ def run_component(component, dataset) -> Path:
 
     # TODO: localization pipeline?
     if is_loc_dataset(IN):
+        # set checkpoint
+        with open(LOC_CHECKPOINT, "w+") as f:
+            f.write("")
         # apply localization
         QUERY_IMAGE_PATH = IMAGES / "query"
         QUERY_IMAGE = parse_image_list_dir(QUERY_IMAGE_PATH, recursive=False)
@@ -226,6 +252,7 @@ def run_component(component, dataset) -> Path:
         references_registered = [model.images[i].name for i in model.reg_image_ids()]
 
         # extract features and match query image again
+        loc_pairs = OUT / f"{id}-pairs_loc.txt"
         extract_features.main(
             extractor_conf,
             IMAGES,
@@ -233,12 +260,23 @@ def run_component(component, dataset) -> Path:
             feature_path=feature_path,
             overwrite=True,
         )
+        """retrieval_conf = extract_features.confs["netvlad"]
+        #retrieval_path = OUT / retrieval_conf["output"]
+        retrieval_path = extract_features.main(
+            retrieval_conf,
+            IMAGES,
+            export_dir=OUT,
+            image_list=[QUERY_IMAGE],
+            overwrite=True,
+        )
+        loc_pairs = OUT / f"{id}-pairs_loc.txt"
+        pairs_from_retrieval.main(retrieval_path, loc_pairs, num_matched=5) """
         pairs_from_exhaustive.main(
-            sfm_pairs, image_list=[QUERY_IMAGE], ref_list=references_registered
+            loc_pairs, image_list=[QUERY_IMAGE], ref_list=references_registered
         )
         match_features.main(
             matcher_conf,
-            sfm_pairs,
+            loc_pairs,
             features=feature_path,
             matches=match_path,
             overwrite=True,
@@ -254,7 +292,7 @@ def run_component(component, dataset) -> Path:
             "refinement": {"refine_focal_length": True, "refine_extra_params": True},
         }
         localizer = QueryLocalizer(model, conf)
-        ret, output_log = pose_from_cluster(
+        ret, logs = pose_from_cluster(
             localizer, QUERY_IMAGE, camera, ref_ids, feature_path, match_path
         )
 
@@ -290,10 +328,18 @@ def run_analysis(blender_file: Path, transforms_json: Path, images_path: Path):
     if not images_path.exists():
         raise Exception("Images path missing")
 
+    dst = transforms_json.parent
+    local_blender_file = dst / blender_file.name
+    if not local_blender_file.exists():
+        log.info(f"  Copying Blender file to local folder for analysis")
+        # copy blender file to local folder
+        shutil.copy(blender_file, dst)
+
+    log.info(f"  Running Analysis")
     subprocess.run(
         [
             "blender",
-            blender_file.resolve(),
+            local_blender_file.resolve(),
             "-b",
             "--python",
             (ROOT / "analyse_dataset.py").resolve(),
@@ -328,10 +374,14 @@ def main(args):
     log.info("Step 1: reconstructions")
     for c in config:
         # implement timer!
+        # run_component(c, dataset_name)
+        # continue
         try:
             run_component(c, dataset_name)
         except Exception as E:
-            log.error(f"  There was a problem with the component run: {E}")
+            log.error(
+                f"  There was a problem with the component run: {E} {traceback.format_exc()}"
+            )
 
     log.info("Step 2: analysis")
     for c in config:
@@ -371,12 +421,16 @@ if __name__ == "__main__":
         type=bool,
         required=False,
         help="Overwrite Analysis Results",
-        default=False
+        default=False,
     )
     args = parser.parse_args()
     if not args.dataset or not args.validator:
         # if not set, use datasets provided in this file
-        for ds in _datasets:
+        datasets = []
+        # build datasets list
+        datasets.extend(datasets_loc)
+        datasets.extend(datasets_sfm)
+        for ds in datasets:
             args.dataset = ds[0]
             args.validator = ROOT / ds[1]
             main(args)

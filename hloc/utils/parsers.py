@@ -22,7 +22,6 @@ def parse_image_list_dir(
     image_files = [
         file for file in all_files if file.suffix.lower() in image_extensions
     ]
-    print(image_files)
     # Convert to absolute paths
     #images = [str(file.resolve()) for file in image_files]
     images = [str(file.name) for file in image_files]
@@ -66,7 +65,7 @@ def parse_image_lists(paths, with_intrinsics=False):
 
 def parse_retrieval(path):
     retrieval = defaultdict(list)
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf8") as f:
         for p in f.read().rstrip("\n").split("\n"):
             if len(p) == 0:
                 continue

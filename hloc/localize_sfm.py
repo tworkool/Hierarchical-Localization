@@ -224,6 +224,8 @@ def main(
         pickle.dump(logs, f)
     logger.info("Done!")
 
+    return ret
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
