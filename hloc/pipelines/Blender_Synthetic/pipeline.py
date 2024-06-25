@@ -36,6 +36,7 @@ logging.basicConfig(format="  >> %(levelname)s: %(message)s", level=logging.INFO
 log = logging.getLogger("HlocBlenderSynthPipeline")
 ROOT = Path(__file__).parent.resolve()
 IMAGES_FOLDER_NAME = "images"
+LOCALIZATION_CAMERA_NAME = "MAIN"
 
 config = [
     {
@@ -221,16 +222,24 @@ def run_component(component, dataset) -> Path:
     # start reconstruction
     # TODO: run post-init SQL command to set prior_focal_length in MAIN cam to "1.25 * max(width_in_px, height_in_px)"
     # as described in https://colmap.github.io/tutorial.html#feature-detection-and-extraction
-    model = reconstruction.main(
-        sfm_dir=sfm_dir,
-        image_dir=IMAGES,
-        pairs=sfm_pairs,
-        features=feature_path,
-        matches=match_path,
-    )
+    gt_focal_length = 26  # mm
+    POST_IMAGE_IMPORT_SQL = f"UPDATE cameras SET prior_focal_length = {gt_focal_length} WHERE camera_id IN (SELECT c.camera_id FROM cameras c JOIN images i ON c.camera_id = i.camera_id WHERE i.name NOT LIKE '%{LOCALIZATION_CAMERA_NAME}%')"
+    reconstruction_args = {
+        "sfm_dir": sfm_dir,
+        "image_dir": IMAGES,
+        "pairs": sfm_pairs,
+        "features": feature_path,
+        "matches": match_path,
+        "post_image_import_sql": POST_IMAGE_IMPORT_SQL,
+    }
+    if is_loc_dataset(IN):
+        reconstruction_args['camera_mode'] = pycolmap.CameraMode.PER_FOLDER
+        # single camera for CAI
+
+    model = reconstruction.main(**reconstruction_args)
 
     # export transforms args
-    args = {
+    transforms_args = {
         "data_dir": str(sfm_dir.resolve()),
         "scene_type": "outdoor",
         "image_dir": str(IMAGES.resolve()),
@@ -305,10 +314,10 @@ def run_component(component, dataset) -> Path:
             QUERY_IMAGE,
             None,  # [i + 1 if e else -1 for i, e in enumerate(ret["inliers"])],
         )
-        args["extra_cam"] = localized_image
+        transforms_args["extra_cam"] = localized_image
 
     # export transforms and copy images
-    data_to_json(args)
+    data_to_json(transforms_args)
 
     sfm_images = sfm_dir / IMAGES_FOLDER_NAME
     if not sfm_images.exists():

@@ -3,6 +3,7 @@ import multiprocessing
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+import numpy as np
 
 import pycolmap
 
@@ -14,7 +15,7 @@ from .triangulation import (
     import_matches,
     parse_option_args,
 )
-from .utils.database import COLMAPDatabase
+from .utils.database import COLMAPDatabase, blob_to_array, array_to_blob
 
 
 def create_empty_db(database_path: Path):
@@ -102,6 +103,31 @@ def run_reconstruction(
         shutil.move(str(models_path / str(largest_index) / filename), str(sfm_dir))
     return reconstructions[largest_index]
 
+def run_sql(database_path: Path, sql: str):
+    db = COLMAPDatabase.connect(database_path)
+    db.execute(sql)
+    db.commit()
+    db.close()
+
+def set_prior_focal_length(database_path: Path, focal_length: float):
+    db = COLMAPDatabase.connect(database_path)
+    condition = "WHERE camera_id IN (SELECT c.camera_id FROM cameras c JOIN images i ON c.camera_id = i.camera_id WHERE i.name NOT LIKE '%MAIN%')"
+    db.execute(
+        f"UPDATE cameras SET prior_focal_length = 1 {condition}"
+    )
+    for camera_id, data, in db.execute(f"SELECT camera_id, params FROM cameras {condition}"):
+        params = blob_to_array(data, np.float64)
+        print(params, camera_id)
+        params[0] = focal_length
+        print(params)
+        db.execute(
+            f"UPDATE cameras SET params = ? WHERE camera_id = ?",
+            (array_to_blob(params), camera_id,),
+        )
+        cursor = db.execute("SELECT * FROM cameras WHERE camera_id = ?", (camera_id,))
+        print(blob_to_array(cursor.fetchone()[4], np.float64))
+    db.commit()
+    db.close()
 
 def main(
     sfm_dir: Path,
@@ -116,6 +142,7 @@ def main(
     image_list: Optional[List[str]] = None,
     image_options: Optional[Dict[str, Any]] = None,
     mapper_options: Optional[Dict[str, Any]] = None,
+    post_image_import_sql: Optional[Any] = None,
 ) -> pycolmap.Reconstruction:
     assert features.exists(), features
     assert pairs.exists(), pairs
@@ -126,6 +153,9 @@ def main(
 
     create_empty_db(database)
     import_images(image_dir, database, camera_mode, image_list, image_options)
+    if post_image_import_sql:
+        #run_sql(database, post_image_import_sql)
+        set_prior_focal_length(database, 26)
     image_ids = get_image_ids(database)
     import_features(image_ids, database, features)
     import_matches(
