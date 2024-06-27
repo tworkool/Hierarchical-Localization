@@ -81,8 +81,8 @@ _datasets = [("framlingham2", "datasets/framlingham2/framlingham.blend")]
 
 datasets_loc = [
     (
-        "LOC-Pelegrina+evening_field_8k",
-        "datasets/LOC-Pelegrina+evening_field_8k/pelegrina.blend",
+        "LOC-Chateu-img1+evening_field_8k", # TODO: run again with new setup
+        "datasets/LOC-Chateu-img1+evening_field_8k/chateu1.blend",
     ),
 ]
 
