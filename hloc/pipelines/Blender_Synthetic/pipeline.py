@@ -66,12 +66,13 @@ config = [
     # TODO: add HP (Does not work...)
 ]
 
+
 """
 config = [
-    {
+        {
         "extractor": "superpoint_max",
-        "matcher": "superglue",
-        "name": "superpoint+superglue",
+        "matcher": "superpoint+lightglue",
+        "name": "superpoint+lightglue",
     },
 ]
 
@@ -80,10 +81,40 @@ _datasets = [("framlingham2", "datasets/framlingham2/framlingham.blend")]
 
 datasets_loc = [
     (
-        "LOC-Bartholomew+evening_field_8k",
-        "datasets/LOC-Bartholomew+evening_field_8k/test.blend",
-    )
+        "LOC-Pelegrina+evening_field_8k",
+        "datasets/LOC-Pelegrina+evening_field_8k/pelegrina.blend",
+    ),
 ]
+
+"""
+datasets_loc = [
+    (
+        "LOC-Bartholomew+evening_field_8k", # TODO: run again with new setup
+        "datasets/LOC-Bartholomew+evening_field_8k/test.blend",
+    ),
+    (
+        "LOC-Chateu-img1+evening_field_8k", # TODO: run again with new setup
+        "datasets/LOC-Chateu-img1+evening_field_8k/chateu1.blend",
+    ),
+    (
+        "LOC-Chateu-img2+evening_field_8k",
+        "datasets/LOC-Chateu-img2+evening_field_8k/chateu2.blend",
+    ),
+    (
+        "LOC-Chateu-img3+evening_field_8k",
+        "datasets/LOC-Chateu-img3+evening_field_8k/chateu3.blend",
+    ),
+    (
+        "LOC-Framlingham+evening_field_8k",
+        "datasets/LOC-Framlingham+evening_field_8k/framlingham.blend",
+    ),
+    (
+        "LOC-Pelegrina+evening_field_8k",
+        "datasets/LOC-Pelegrina+evening_field_8k/pelegrina.blend",
+    ),
+]
+"""
+
 
 datasets_sfm = [
     (
@@ -198,9 +229,17 @@ def run_component(component, dataset) -> Path:
     )  # IMPORTANT: non recursive to only load first layer
 
     feature_path = None
+
+    if is_loc_dataset(IN):
+        # use only first layer of images
+        image_list = parse_image_list_dir(IMAGES, recursive=False)
+    else:
+        # use all images
+        image_list = parse_image_list_dir(IMAGES, recursive=True)
+
     # extract features
     if extractor_conf:
-        feature_path = extract_features.main(extractor_conf, IMAGES, OUT)
+        feature_path = extract_features.main(extractor_conf, IMAGES, OUT, image_list=image_list)
 
     # match features
     if is_dense:
@@ -230,11 +269,12 @@ def run_component(component, dataset) -> Path:
         "pairs": sfm_pairs,
         "features": feature_path,
         "matches": match_path,
-        "post_image_import_sql": POST_IMAGE_IMPORT_SQL,
+        "image_list": image_list,
+        #"post_image_import_sql": POST_IMAGE_IMPORT_SQL,
     }
-    if is_loc_dataset(IN):
-        reconstruction_args['camera_mode'] = pycolmap.CameraMode.PER_FOLDER
-        # single camera for CAI
+    #if is_loc_dataset(IN):
+    #    reconstruction_args["camera_mode"] = pycolmap.CameraMode.PER_FOLDER
+    #    # single camera for CAI
 
     model = reconstruction.main(**reconstruction_args)
 
@@ -248,6 +288,46 @@ def run_component(component, dataset) -> Path:
 
     # TODO: localization pipeline?
     if is_loc_dataset(IN):
+        from hloc.utils.io import generate_query_list, generate_localization_pairs
+
+        QUERY_IMAGE = parse_image_list_dir(IMAGES / "query", recursive=False)
+        if len(QUERY_IMAGE) == 0:
+            raise Exception("no query images found")
+        QUERY_IMAGE = f"query/{QUERY_IMAGE[0]}"
+        QUERY_IMAGE_PATH = IMAGES / QUERY_IMAGE
+        retrieval_conf = extract_features.confs["netvlad"]
+
+        query_list = OUT / "queries_with_intrinsics.txt"
+        query_camera = pycolmap.infer_camera_from_image(QUERY_IMAGE_PATH)
+        generate_query_list([query_camera], [QUERY_IMAGE], query_list)
+
+        netvlad_features = extract_features.main(retrieval_conf, IMAGES, OUT, overwrite=True)
+        retrieval_path = OUT / "netvlad_retrieval_pairs.txt"
+        pairs_from_retrieval.main(netvlad_features, retrieval_path, num_matched=8)
+
+        # extract features again for the query image and match them
+        feature_path = extract_features.main(
+            extractor_conf, IMAGES, OUT, image_list=[QUERY_IMAGE], overwrite=True
+        )
+        match_path = match_features.main(
+            matcher_conf,
+            retrieval_path,
+            features=feature_path,
+            matches=match_path,
+            overwrite=True,
+        )
+
+        results = OUT / "localize_results.txt"
+        ret = localize_sfm.main(
+            reference_sfm=sfm_dir,  # sparse reconstruction colmap directory
+            queries=query_list,  # txt file
+            retrieval=retrieval_path,  # txt file
+            features=feature_path,  # h5 file
+            matches=match_path,  # h5 file
+            results=results,  # output txt file
+        )  # not required with SuperPoint+SuperGlue
+        
+        """
         # set checkpoint
         with open(LOC_CHECKPOINT, "w+") as f:
             f.write("")
@@ -269,7 +349,7 @@ def run_component(component, dataset) -> Path:
             feature_path=feature_path,
             overwrite=True,
         )
-        """retrieval_conf = extract_features.confs["netvlad"]
+        '''retrieval_conf = extract_features.confs["netvlad"]
         #retrieval_path = OUT / retrieval_conf["output"]
         retrieval_path = extract_features.main(
             retrieval_conf,
@@ -279,7 +359,7 @@ def run_component(component, dataset) -> Path:
             overwrite=True,
         )
         loc_pairs = OUT / f"{id}-pairs_loc.txt"
-        pairs_from_retrieval.main(retrieval_path, loc_pairs, num_matched=5) """
+        pairs_from_retrieval.main(retrieval_path, loc_pairs, num_matched=5) '''
         pairs_from_exhaustive.main(
             loc_pairs, image_list=[QUERY_IMAGE], ref_list=references_registered
         )
@@ -304,6 +384,7 @@ def run_component(component, dataset) -> Path:
         ret, logs = pose_from_cluster(
             localizer, QUERY_IMAGE, camera, ref_ids, feature_path, match_path
         )
+        """
 
         # extract localized camera
         localized_image = TempImage(
@@ -438,7 +519,7 @@ if __name__ == "__main__":
         datasets = []
         # build datasets list
         datasets.extend(datasets_loc)
-        datasets.extend(datasets_sfm)
+        # datasets.extend(datasets_sfm)
         for ds in datasets:
             args.dataset = ds[0]
             args.validator = ROOT / ds[1]

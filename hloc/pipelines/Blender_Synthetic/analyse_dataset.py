@@ -13,6 +13,8 @@ DEFAULT_FOCAL_LENGTH = 27
 DEFAULT_SENSOR_WIDTH = 35
 MAX_REPROJECTION_ERROR_THESHOLD = 1.0  # warning if avg is above
 MAX_CAMS = 10  # for transformation alignment
+MIN_CAMS = 5  # minimum number of cameras to align
+MAX_IT = 100 # max iterations to find top cameras
 
 
 def eval_args():
@@ -94,12 +96,15 @@ def get_top_cams(cam_map):
     it_increase = 0.05
     it = 1
     # try to find at least MAX_CAMS which have low reprojection error
-    while True:
+    while it <= MAX_IT:
         filtered_cams = [c for c in sorted_cams if c["error"] < max_error_threshold]
         if len(filtered_cams) >= MAX_CAMS:
             break
         it += 1
         max_error_threshold += it_increase
+
+    if it > MAX_IT and len(filtered_cams) <  MIN_CAMS:
+        raise Exception(f"Could not get top cameras after ({MAX_IT}) iterations and with at least {MIN_CAMS} cameras with low reprojection error!")
 
     mean_error = np.asarray([x["error"] for x in filtered_cams]).mean()
     print(f"INFO: found {len(filtered_cams)} with mean error of {mean_error} after {it} iterations with an increase in error of {(max_error_threshold - MAX_REPROJECTION_ERROR_THESHOLD):.3f}px")
