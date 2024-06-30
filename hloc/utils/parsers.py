@@ -45,6 +45,7 @@ def parse_image_list(path, with_intrinsics=False):
                 cam = pycolmap.Camera(
                     model=model, width=int(width), height=int(height), params=params
                 )
+                print(cam)
                 images.append((name, cam))
             else:
                 images.append(name)

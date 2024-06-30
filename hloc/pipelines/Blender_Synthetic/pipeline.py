@@ -67,33 +67,28 @@ config = [
 ]
 
 
-"""
 config = [
-        {
-        "extractor": "superpoint_max",
-        "matcher": "superpoint+lightglue",
-        "name": "superpoint+lightglue",
-    },
+    {"matcher": "loftr", "name": "loftr"},
 ]
-
+"""
 _datasets = [("framlingham2", "datasets/framlingham2/framlingham.blend")]
 """
-
+"""
 datasets_loc = [
     (
-        "LOC-Chateu-img1+evening_field_8k", # TODO: run again with new setup
+        "LOC-Chateu-img1+evening_field_8k",
         "datasets/LOC-Chateu-img1+evening_field_8k/chateu1.blend",
     ),
 ]
-
 """
+
 datasets_loc = [
     (
-        "LOC-Bartholomew+evening_field_8k", # TODO: run again with new setup
+        "LOC-Bartholomew+evening_field_8k",
         "datasets/LOC-Bartholomew+evening_field_8k/test.blend",
     ),
     (
-        "LOC-Chateu-img1+evening_field_8k", # TODO: run again with new setup
+        "LOC-Chateu-img1+evening_field_8k",
         "datasets/LOC-Chateu-img1+evening_field_8k/chateu1.blend",
     ),
     (
@@ -113,7 +108,6 @@ datasets_loc = [
         "datasets/LOC-Pelegrina+evening_field_8k/pelegrina.blend",
     ),
 ]
-"""
 
 
 datasets_sfm = [
@@ -239,7 +233,9 @@ def run_component(component, dataset) -> Path:
 
     # extract features
     if extractor_conf:
-        feature_path = extract_features.main(extractor_conf, IMAGES, OUT, image_list=image_list)
+        feature_path = extract_features.main(
+            extractor_conf, IMAGES, OUT, image_list=image_list
+        )
 
     # match features
     if is_dense:
@@ -270,9 +266,9 @@ def run_component(component, dataset) -> Path:
         "features": feature_path,
         "matches": match_path,
         "image_list": image_list,
-        #"post_image_import_sql": POST_IMAGE_IMPORT_SQL,
+        # "post_image_import_sql": POST_IMAGE_IMPORT_SQL,
     }
-    #if is_loc_dataset(IN):
+    # if is_loc_dataset(IN):
     #    reconstruction_args["camera_mode"] = pycolmap.CameraMode.PER_FOLDER
     #    # single camera for CAI
 
@@ -301,21 +297,37 @@ def run_component(component, dataset) -> Path:
         query_camera = pycolmap.infer_camera_from_image(QUERY_IMAGE_PATH)
         generate_query_list([query_camera], [QUERY_IMAGE], query_list)
 
-        netvlad_features = extract_features.main(retrieval_conf, IMAGES, OUT, overwrite=True)
+        netvlad_features = extract_features.main(
+            retrieval_conf, IMAGES, OUT, overwrite=True
+        )
         retrieval_path = OUT / "netvlad_retrieval_pairs.txt"
         pairs_from_retrieval.main(netvlad_features, retrieval_path, num_matched=8)
+        # pairs_from_all.main(retrieval_path, IMAGES, recursive=True)
 
+        feature_path = None
         # extract features again for the query image and match them
-        feature_path = extract_features.main(
-            extractor_conf, IMAGES, OUT, image_list=[QUERY_IMAGE], overwrite=True
-        )
-        match_path = match_features.main(
-            matcher_conf,
-            retrieval_path,
-            features=feature_path,
-            matches=match_path,
-            overwrite=True,
-        )
+        if extractor_conf:
+            feature_path = extract_features.main(
+                extractor_conf, IMAGES, OUT, image_list=[QUERY_IMAGE], overwrite=True
+            )
+        # match features
+        if is_dense:
+            feature_path, match_path = match_dense.main(
+                matcher_conf,
+                retrieval_path,
+                image_dir=IMAGES,
+                export_dir=OUT,
+                features_ref=feature_path,
+                overwrite=True,
+            )
+        else:
+            match_path = match_features.main(
+                matcher_conf,
+                retrieval_path,
+                features=feature_path,
+                matches=match_path,
+                overwrite=True,
+            )
 
         results = OUT / "localize_results.txt"
         ret = localize_sfm.main(
@@ -326,7 +338,7 @@ def run_component(component, dataset) -> Path:
             matches=match_path,  # h5 file
             results=results,  # output txt file
         )  # not required with SuperPoint+SuperGlue
-        
+
         """
         # set checkpoint
         with open(LOC_CHECKPOINT, "w+") as f:
