@@ -52,6 +52,8 @@ config = [
         "name": "superpoint+lightglue",
     },
     {"extractor": "r2d2", "matcher": "NN-ratio", "name": "r2d2+nn_ratio"},
+    {"extractor": "r2d2", "matcher": "NN-mutual", "name": "r2d2+nn_mutual"},
+    {"extractor": "r2d2", "matcher": "adalam", "name": "r2d2+adalam"},
     # {
     #    "extractor": "superpoint_max",
     #    "matcher": "loftr_superpoint",
@@ -66,13 +68,19 @@ config = [
     # TODO: add HP (Does not work...)
 ]
 
-
 config = [
-    {"matcher": "loftr", "name": "loftr"},
+    {
+        "extractor": "superpoint_max",
+        "matcher": "superpoint+lightglue",
+        "name": "TESTER",
+    },
 ]
-"""
-_datasets = [("framlingham2", "datasets/framlingham2/framlingham.blend")]
-"""
+_datasets = [
+    (
+        "LOC-Framlingham+evening_field_8k",
+        "datasets/LOC-Framlingham+evening_field_8k/framlingham.blend",
+    ),
+]
 """
 datasets_loc = [
     (
@@ -530,8 +538,9 @@ if __name__ == "__main__":
         # if not set, use datasets provided in this file
         datasets = []
         # build datasets list
-        datasets.extend(datasets_loc)
-        # datasets.extend(datasets_sfm)
+        #datasets.extend(datasets_loc)
+        #datasets.extend(datasets_sfm)
+        datasets.extend(_datasets)
         for ds in datasets:
             args.dataset = ds[0]
             args.validator = ROOT / ds[1]

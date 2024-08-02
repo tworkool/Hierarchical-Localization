@@ -236,6 +236,10 @@ def export_to_json(
     # read poses
     for img_id, img in sorted(images.items()):
         rotation = qvec2rotmat(img.qvec)
+        if "query/" in img.name:
+            print(rotation)
+            #rotation = rotation.T
+            rotation = np.array([[-1, 0, 0], [0, -1, 0], [0, 0, 1]]) @ rotation
         translation = img.tvec.reshape(3, 1)
         w2c = np.concatenate([rotation, translation], 1)
         w2c = np.concatenate([w2c, np.array([0, 0, 0, 1])[None]], 0)
@@ -243,9 +247,11 @@ def export_to_json(
         c2w = _cv_to_gl(c2w)  # convert to GL convention used in iNGP
 
         if "query/" in img.name:
+            pass
             # handle query image transform
-            transform1 = np.array([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-            c2w = transform1 @ c2w
+            #transform1 = np.array([[-1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+            #transform1 = np.array([[-1, 0, 0, 0], [0, 0, 1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])
+            #c2w = transform1 @ c2w
 
         frame_err = calculate_mean_frame_error(img, points3D)
         print(f"frame reprojection error for image ID {img_id}: {round(frame_err, 3)}")

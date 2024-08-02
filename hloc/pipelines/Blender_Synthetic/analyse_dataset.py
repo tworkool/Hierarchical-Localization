@@ -190,7 +190,7 @@ def align_estimated_to_ground_truth(est_cams, top_cams, apply_to=None):
     scale, rotation, translation = helmert_transform_averaged(gt_positions, est_positions)
 
     try:
-        local_rot = Matrix(np.linalg.inv(rotation)).transposed().to_euler()
+        local_rot = Matrix(rotation).to_euler()
     except np.linalg.LinAlgError as e:
         raise Exception(
             f"Failed to apply local rotation due to not inversible rotation matrix: {e}"
@@ -334,6 +334,29 @@ def adjust_scene(data):
     bpy.context.scene.render.resolution_y = h
     return
 
+def opengl_to_blender_rotation_matrix(R_opengl):
+    # Initialize an empty 3x3 matrix for Blender coordinates
+    R_blender = np.zeros((3, 3))
+    
+    # Apply the transformation rules to convert the rotation matrix
+    R_blender[0, 0] = R_opengl[0, 0]
+    R_blender[0, 1] = -R_opengl[0, 2]
+    R_blender[0, 2] = R_opengl[0, 1]
+    
+    R_blender[1, 0] = R_opengl[2, 0]
+    R_blender[1, 1] = -R_opengl[2, 2]
+    R_blender[1, 2] = R_opengl[2, 1]
+    
+    R_blender[2, 0] = R_opengl[1, 0]
+    R_blender[2, 1] = -R_opengl[1, 2]
+    R_blender[2, 2] = R_opengl[1, 1]
+    
+    return R_blender
+
+def transform_matrix_to_rotation(m):
+    # extract rotation matrix from first 3x3 part of the transform matrix
+    m = m[:3, :3]
+    return m
 
 def draw_frames(data, image_path: Path):
     # Extract the data
@@ -344,6 +367,14 @@ def draw_frames(data, image_path: Path):
         # transform COLMAP coords to blender
         blender_transform = colmap_to_blender4(frame["transform_matrix"])
         transform_matrix = Matrix(blender_transform.tolist())
+        rotation_matrix = transform_matrix_to_rotation(blender_transform)
+        """ if "query" in frame["file_path"]:
+            Matrix(rotation_matrix).to_quaternion()
+            #print(rotation_matrix)
+            #rotation_matrix = opengl_to_blender_rotation_matrix(rotation_matrix)
+            #print(rotation_matrix) """
+
+        rotation_matrix = Matrix(rotation_matrix)
 
         # Extract the position from the last column of the matrix
         position = transform_matrix.translation
@@ -356,7 +387,7 @@ def draw_frames(data, image_path: Path):
         # Set the location of the camera object to the translation part of the matrix
         camera_obj.location = position
         # Set the rotation of the camera object to the rotation part of the matrix
-        camera_obj.rotation_euler = transform_matrix.to_euler("XYZ")
+        camera_obj.rotation_euler = rotation_matrix.to_euler("XYZ")
         # Scale the camera object
         # camera_obj.scale = (0.5, 0.5, 0.5)
         camera_obj.name = frame["file_path"]
