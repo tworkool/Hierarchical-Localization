@@ -116,6 +116,7 @@ def get_frames(images: dict, points3D) -> list:
     ret = []
 
     for img_id, img in images.items():
+        # get global camera pose from image by inverting the cam_from_world matrix
         world_t_camera = img.cam_from_world.inverse()
         rot = world_t_camera.rotation.matrix()
         # qvec = world_t_camera.rotation.quat
@@ -199,6 +200,7 @@ def data_to_json(
         "fl_y": fl_y,
         "cx": cx,
         "cy": cy,
+        "k": k,
         "w": int(w),
         "h": int(h),
         "frames": frames,

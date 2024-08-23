@@ -19,7 +19,8 @@ from hloc import (
 )
 
 from hloc.utils.parsers import parse_image_list_dir
-from third_party.Neuralangelo.convert_data_to_json import data_to_json
+#from third_party.Neuralangelo.convert_data_to_json import data_to_json
+from third_party.Neuralangelo.generate_transforms import data_to_json, ExtraPose
 import pycolmap
 from hloc.localize_sfm import QueryLocalizer, pose_from_cluster
 import numpy as np
@@ -68,13 +69,13 @@ config = [
     # TODO: add HP (Does not work...)
 ]
 
-config = [
+""" config = [
     {
         "extractor": "superpoint_max",
         "matcher": "superpoint+lightglue",
         "name": "TESTER",
     },
-]
+] """
 _datasets = [
     (
         "LOC-Framlingham+evening_field_8k",
@@ -283,11 +284,16 @@ def run_component(component, dataset) -> Path:
     model = reconstruction.main(**reconstruction_args)
 
     # export transforms args
-    transforms_args = {
+    """ transforms_args = {
         "data_dir": str(sfm_dir.resolve()),
         "scene_type": "outdoor",
         "image_dir": str(IMAGES.resolve()),
         "name": "transforms.json",
+    } """
+    transforms_args = {
+        "reconstruction": model,
+        "image_path": IMAGES,
+        "data_path": sfm_dir,
     }
 
     # TODO: localization pipeline?
@@ -407,7 +413,7 @@ def run_component(component, dataset) -> Path:
         """
 
         # extract localized camera
-        localized_image = TempImage(
+        """ localized_image = TempImage(
             ret["cam_from_world"].rotation.todict()[
                 "quat"
             ],  # do this to as a workaround to extract numpy array instead of Rotation3D quaternion
@@ -415,10 +421,16 @@ def run_component(component, dataset) -> Path:
             QUERY_IMAGE,
             None,  # [i + 1 if e else -1 for i, e in enumerate(ret["inliers"])],
         )
-        transforms_args["extra_cam"] = localized_image
+        transforms_args["extra_cam"] = localized_image """
+        transforms_args["extra_pose"] = ExtraPose(
+            image=pycolmap.Image(cam_from_world=ret['cam_from_world']),
+            camera=query_camera,
+            img_name=QUERY_IMAGE
+        )
 
     # export transforms and copy images
-    data_to_json(transforms_args)
+    #data_to_json(transforms_args)
+    data_to_json(**transforms_args)
 
     sfm_images = sfm_dir / IMAGES_FOLDER_NAME
     if not sfm_images.exists():
@@ -538,9 +550,9 @@ if __name__ == "__main__":
         # if not set, use datasets provided in this file
         datasets = []
         # build datasets list
-        #datasets.extend(datasets_loc)
+        datasets.extend(datasets_loc)
         #datasets.extend(datasets_sfm)
-        datasets.extend(_datasets)
+        #datasets.extend(_datasets)
         for ds in datasets:
             args.dataset = ds[0]
             args.validator = ROOT / ds[1]

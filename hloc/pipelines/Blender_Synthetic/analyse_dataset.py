@@ -11,10 +11,10 @@ ROOT = Path(__file__).resolve()
 transforms = None
 DEFAULT_FOCAL_LENGTH = 27
 DEFAULT_SENSOR_WIDTH = 35
-MAX_REPROJECTION_ERROR_THESHOLD = 1.0  # warning if avg is above
+MAX_REPROJECTION_ERROR_THESHOLD = 2.0  # warning if avg is above
 MAX_CAMS = 10  # for transformation alignment
 MIN_CAMS = 5  # minimum number of cameras to align
-MAX_IT = 100 # max iterations to find top cameras
+MAX_IT = 1000 # max iterations to find top cameras
 
 
 def eval_args():
@@ -86,8 +86,51 @@ def map_cameras(m1, m2, data):
     
     return map
 
+REPROJECTION_ERROR_INIT = 0.8
+IDEAL_REPROJECTION_ERROR = 1
+MAX_REPROJECTION_ERROR = 3
+ITERATION_INCREASE = 0.005
+MIN_CAMS = 10
+MAX_CAMS = 15
+MAX_ITERATIONS = 999
 
 def get_top_cams(cam_map):
+    sorted_cams = sorted(cam_map, key=lambda x: x["error"])
+
+    filtered_cams = []
+    max_error_threshold = REPROJECTION_ERROR_INIT
+    it = 1
+    # try to find at least MAX_CAMS which have low reprojection error
+    while it < MAX_ITERATIONS and max_error_threshold < MAX_REPROJECTION_ERROR:
+        filtered_cams = [c for c in sorted_cams if c["error"] < max_error_threshold]
+        num_filtered_cams = len(filtered_cams)
+        if num_filtered_cams >= MAX_CAMS or num_filtered_cams == len(sorted_cams):
+            break
+        mean_error = np.asarray([x["error"] for x in filtered_cams]).mean()
+        if num_filtered_cams >= MIN_CAMS and mean_error <= IDEAL_REPROJECTION_ERROR:
+            break
+        it += 1
+        max_error_threshold += ITERATION_INCREASE
+
+    if len(filtered_cams) < MIN_CAMS:
+        raise Exception(
+            f"Could not get top cameras after ({it}) iterations and with at least {MIN_CAMS} (current: {len(filtered_cams)}) cameras with low reprojection error!"
+        )
+
+    mean_error = np.asarray([x["error"] for x in filtered_cams]).mean()
+    print(
+        f"INFO: found {len(filtered_cams)} with mean error of {mean_error} after {it} iterations with an increase in error of {(max_error_threshold - REPROJECTION_ERROR_INIT):.3f}px"
+    )
+
+    if mean_error > IDEAL_REPROJECTION_ERROR:
+        print(
+            f"WARNING: camera exceeds max error theshold and could lead to inaccurately aligned cameras: {mean_error}"
+        )
+
+    return filtered_cams
+
+
+def get_top_cams1(cam_map):
     sorted_cams = sorted(cam_map, key=lambda x: x["error"])
     sorted_cams = [i for i in sorted_cams if not is_main_cam(i)] # filter out main cam
     
